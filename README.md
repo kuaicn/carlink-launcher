@@ -32,13 +32,15 @@ Activity，把任意手机应用"投"进车机屏幕使用。
 carlink-launcher/
 ├── Android.bp                  # android_app: CarLinkLauncher（platform 签名、privileged）
 ├── AndroidManifest.xml         # MAIN+LAUNCHER、MANAGE_TASK_VIEW 签名权限、QUERY_ALL_PACKAGES
-├── aidl/com/carlink/taskview/  # 跨进程契约三件套（launcher 与 SystemUI 共用）
-├── src/com/carlink/launcher/
-│   ├── LauncherActivity.java   # 桌面主体：应用列表 + 双槽管理
-│   ├── AppInfo.java / AppListAdapter.java   # 纯 framework View 的列表
-│   └── taskview/
-│       ├── CarLinkTaskView.java           # SurfaceView 客户端（改自 AAOS RemoteCarTaskView）
-│       └── TaskViewServiceClient.java     # bind 服务 + 断线重连骨架 + linkToDeath
+├── src/com/carlink/
+│   ├── taskview/               # 跨进程契约 AIDL 三件套（launcher 与 SystemUI 共用；
+│   │                           #   置于 src/ 下以落入 Soong 默认 AIDL 导入搜索路径）
+│   └── launcher/
+│       ├── LauncherActivity.java   # 桌面主体：应用列表 + 双槽管理
+│       ├── AppInfo.java / AppListAdapter.java   # 纯 framework View 的列表
+│       └── taskview/
+│           ├── CarLinkTaskView.java           # SurfaceView 客户端（改自 AAOS RemoteCarTaskView）
+│           └── TaskViewServiceClient.java     # bind 服务 + 断线重连骨架 + linkToDeath
 ├── res/                        # 布局/中文文案/系统主题
 ├── systemui/                   # SystemUI 补丁镜像 + 放置说明（与树内文件一致）
 │   └── README.md               #   每个文件拷贝到树内哪个路径、手工注册点清单

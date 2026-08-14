@@ -6,7 +6,7 @@ android_app {
     name: "CarLinkLauncher",
     srcs: [
         "src/**/*.java",
-        "aidl/**/*.aidl",
+        "src/**/*.aidl",
     ],
     manifest: "AndroidManifest.xml",
     platform_apis: true,

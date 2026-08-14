@@ -11,7 +11,7 @@
 vendor/carlink/launcher/
 ├── Android.bp                  # android_app: CarLinkLauncher
 ├── AndroidManifest.xml
-├── aidl/com/carlink/taskview/  # 三份 AIDL
+├── src/com/carlink/taskview/   # 三份 AIDL（src/ 下，走 Soong 默认导入搜索路径）
 ├── src/com/carlink/launcher/   # 5 个 Java 文件
 ├── res/                        # 布局/文案/主题
 ├── README.md / docs/ / LICENSE
