@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 车机桌面（privapp）：运行在互联服务创建的虚拟屏内，左栏列出手机已安装应用，
+     主/副槽位通过 SystemUI 侧的 TaskView 桥嵌入第三方 App 的 Activity。
+     MANAGE_TASK_VIEW 为签名级权限，SystemUI 侧服务用它做调用方闸门；
+     QUERY_ALL_PACKAGES 用于应用列表可见性，由 privapp-permissions-carlink.xml 白名单放行。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.carlink.launcher">
+
+    <permission
+        android:name="com.carlink.permission.MANAGE_TASK_VIEW"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.carlink.permission.MANAGE_TASK_VIEW" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <application
+        android:label="@string/app_name"
+        android:theme="@style/CarLinkLauncherTheme">
+        <activity
+            android:name=".LauncherActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

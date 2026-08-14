@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- System theme is enough for the v1 skeleton; no appcompat/material dependency. -->
+    <style name="CarLinkLauncherTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

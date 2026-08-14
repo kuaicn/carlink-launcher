@@ -1,0 +1,16 @@
+// 车机桌面 privapp —— 虚拟屏内的车机 Launcher
+// 由 com.carlink.interconnect 通过 getLaunchIntentForPackage + setLaunchDisplayId 拉起；
+// 嵌入能力依赖 SystemUI 侧补丁（systemui/ 目录，已落在 frameworks/base/packages/SystemUI）。
+
+android_app {
+    name: "CarLinkLauncher",
+    srcs: [
+        "src/**/*.java",
+        "aidl/**/*.aidl",
+    ],
+    manifest: "AndroidManifest.xml",
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    optimize: { enabled: false },
+}

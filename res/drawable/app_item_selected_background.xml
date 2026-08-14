@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Selection highlight for the app currently embedded in the main slot. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#33445566" />
+    <corners android:radius="8dp" />
+</shape>
