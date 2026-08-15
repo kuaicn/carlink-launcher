@@ -23,6 +23,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Rect;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.RemoteException;
 import android.util.Slog;
 import android.view.SurfaceControl;
@@ -62,53 +63,69 @@ import java.util.function.Consumer;
  * </ul>
  *
  * <p>Threading: binder calls arrive on binder threads and are posted to the main executor;
- * they are queued while the asynchronous {@link TaskViewFactory#create} is in flight.
- * {@link TaskViewBase} callbacks arrive on the shell executor and are forwarded to the
- * (oneway) client binder directly.
+ * they are queued (bounded, see {@link #MAX_PENDING_OPS}) while the asynchronous
+ * {@link TaskViewFactory#create} is in flight. {@link TaskViewBase} callbacks arrive on the
+ * shell executor and are forwarded to the (oneway) client binder directly. The client binder
+ * is linked to death: a client that dies without {@code release()} triggers the same
+ * idempotent release path on the main executor.
  */
 public class CarLinkTaskViewServerImpl implements TaskViewBase {
     private static final String TAG = "CarLinkTaskViewServerImpl";
+
+    /**
+     * Maximum number of binder calls queued while the asynchronous {@link TaskViewFactory#create}
+     * is in flight. The queue only lives for the duration of a thread hop (binder -> shell ->
+     * main executor), so a full queue means a flooded or stalled caller; excess ops are dropped.
+     */
+    private static final int MAX_PENDING_OPS = 32;
 
     private final Context mContext;
     private final Executor mMainExecutor;
     private final ICarLinkTaskViewClient mClient;
     private final CarLinkTaskViewHost mHost;
+    private final int mOwnerUid;
     private final Rect mLastBounds = new Rect();
     private final List<Consumer<TaskView>> mPendingOps = new ArrayList<>();
 
     private TaskView mTaskView;
     private boolean mReleased;
 
+    /**
+     * Releases this server when the client process dies without calling {@code release()},
+     * otherwise the TaskView, its ShellTaskOrganizer listener registration and the embedded
+     * task would leak. AAOS relies on the car service wrapper for this; this bridge owns the
+     * client binder directly, so it links to death itself.
+     */
+    private final IBinder.DeathRecipient mDeathRecipient = new IBinder.DeathRecipient() {
+        @Override
+        public void binderDied() {
+            Slog.w(TAG, "Task view client died; releasing the server side");
+            mMainExecutor.execute(CarLinkTaskViewServerImpl.this::releaseInternal);
+        }
+    };
+
     private final ICarLinkTaskViewHost.Stub mHostImpl = new ICarLinkTaskViewHost.Stub() {
+        // Every method re-checks the permission, mirroring AAOS RemoteCarTaskViewServerImpl:
+        // the host binder can be handed to a third process by the client, so createTaskView()'s
+        // check alone is not sufficient. The check MUST stay the first statement of each method
+        // (on the binder thread, before any hop to the main executor): once posted, the calling
+        // identity is gone and the myPid() bypass in ensureManageTaskViewPermission() would
+        // silently let any caller through.
         @Override
         public void release() {
-            mMainExecutor.execute(() -> {
-                synchronized (mPendingOps) {
-                    if (mReleased) {
-                        Slog.w(TAG, "TaskView server part already released");
-                        return;
-                    }
-                    mReleased = true;
-                    mPendingOps.clear();
-                }
-                if (mTaskView != null) {
-                    // Unlike AAOS (explicit removeTask), TaskView#release alone only
-                    // unregisters the controller; removeTask() removes the embedded task
-                    // from WM first.
-                    mTaskView.removeTask();
-                    mTaskView.release();
-                }
-                mHost.onServerReleased(CarLinkTaskViewServerImpl.this);
-            });
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
+            mMainExecutor.execute(CarLinkTaskViewServerImpl.this::releaseInternal);
         }
 
         @Override
         public void notifySurfaceCreated(SurfaceControl control) {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             postToTaskView(taskView -> taskView.getController().surfaceCreated(control));
         }
 
         @Override
         public void setWindowBounds(Rect bounds) {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             postToTaskView(taskView -> {
                 synchronized (mLastBounds) {
                     mLastBounds.set(bounds);
@@ -118,12 +135,14 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
 
         @Override
         public void notifySurfaceDestroyed() {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             postToTaskView(taskView -> taskView.getController().surfaceDestroyed());
         }
 
         @Override
         public void startActivity(PendingIntent pendingIntent, Intent fillInIntent,
                 Bundle options, Rect launchBounds) {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             postToTaskView(taskView -> {
                 ActivityOptions opt = ActivityOptions.fromBundle(options);
                 if (opt == null) {
@@ -138,6 +157,7 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
 
         @Override
         public void createRootTask(int displayId) {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             // Not supported: creating a root task requires ShellTaskOrganizer, which is not
             // exposed to the phone SystemUI process. RootTaskMediator from AAOS is therefore
             // not ported; the launcher only embeds regular activity tasks in v1.
@@ -146,23 +166,35 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
 
         @Override
         public void setTaskVisibility(boolean visible) {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             // No-op: task visibility follows the client surface (created/destroyed), which
             // covers the launcher slot model.
         }
 
         @Override
         public void showEmbeddedTask() {
+            CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             // No-op: launcher slots never overlap, so an embedded task is always frontmost
             // inside its own slot.
         }
     };
 
     public CarLinkTaskViewServerImpl(Context context, Executor mainExecutor,
-            ICarLinkTaskViewClient client, CarLinkTaskViewHost host) {
+            ICarLinkTaskViewClient client, CarLinkTaskViewHost host, int ownerUid) {
         mContext = context;
         mMainExecutor = mainExecutor;
         mClient = client;
         mHost = host;
+        mOwnerUid = ownerUid;
+        try {
+            client.asBinder().linkToDeath(mDeathRecipient, 0);
+        } catch (RemoteException e) {
+            // The client died between createTaskView() and here; nothing will ever call
+            // release(), so schedule it ourselves. Safe before init(): the TaskView creation
+            // callback re-checks mReleased and releases the fresh TaskView immediately.
+            Slog.w(TAG, "client already dead at createTaskView; scheduling release", e);
+            mMainExecutor.execute(this::releaseInternal);
+        }
     }
 
     /** Starts the asynchronous TaskView creation. */
@@ -193,9 +225,39 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
         return mHostImpl;
     }
 
+    /** The uid that created this server, captured on the binder thread at creation time. */
+    int getOwnerUid() {
+        return mOwnerUid;
+    }
+
+    /**
+     * Idempotent release; must run on the main executor (where every other TaskView
+     * interaction happens). Invoked by the client via {@code release()} and by the death
+     * recipient when the client process dies.
+     */
+    private void releaseInternal() {
+        synchronized (mPendingOps) {
+            if (mReleased) {
+                Slog.w(TAG, "TaskView server part already released");
+                return;
+            }
+            mReleased = true;
+            mPendingOps.clear();
+        }
+        mClient.asBinder().unlinkToDeath(mDeathRecipient, 0);
+        if (mTaskView != null) {
+            // Unlike AAOS (explicit removeTask), TaskView#release alone only
+            // unregisters the controller; removeTask() removes the embedded task
+            // from WM first.
+            mTaskView.removeTask();
+            mTaskView.release();
+        }
+        mHost.onServerReleased(this);
+    }
+
     /**
      * Runs the op on the main executor once the TaskView exists; calls arriving before
-     * {@link #init} completes are queued in order.
+     * {@link #init} completes are queued in order, up to {@link #MAX_PENDING_OPS}.
      */
     private void postToTaskView(Consumer<TaskView> op) {
         mMainExecutor.execute(() -> {
@@ -204,6 +266,11 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
                     return;
                 }
                 if (mTaskView == null) {
+                    if (mPendingOps.size() >= MAX_PENDING_OPS) {
+                        Slog.w(TAG, "Dropping op: too many calls queued before the TaskView "
+                                + "is ready");
+                        return;
+                    }
                     mPendingOps.add(op);
                     return;
                 }

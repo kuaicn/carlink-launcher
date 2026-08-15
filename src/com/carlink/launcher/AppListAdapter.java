@@ -73,16 +73,29 @@ public class AppListAdapter extends BaseAdapter {
     @Override
     public View getView(int position, View convertView, ViewGroup parent) {
         View view = convertView;
+        ViewHolder holder;
         if (view == null) {
             view = mInflater.inflate(R.layout.item_app, parent, false);
+            holder = new ViewHolder();
+            holder.icon = view.findViewById(R.id.app_icon);
+            holder.label = view.findViewById(R.id.app_label);
+            view.setTag(holder);
+        } else {
+            holder = (ViewHolder) view.getTag();
         }
         AppInfo app = getItem(position);
-        ((ImageView) view.findViewById(R.id.app_icon)).setImageDrawable(app.icon);
-        ((TextView) view.findViewById(R.id.app_label)).setText(app.label);
+        holder.icon.setImageDrawable(app.icon);
+        holder.label.setText(app.label);
         boolean inMainSlot = app.packageName.equals(mMainSlotPackage);
         view.setBackgroundResource(inMainSlot
                 ? R.drawable.app_item_selected_background
                 : android.R.color.transparent);
         return view;
+    }
+
+    /** Cached child view lookups for a recycled row. */
+    private static final class ViewHolder {
+        ImageView icon;
+        TextView label;
     }
 }

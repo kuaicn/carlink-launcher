@@ -154,6 +154,11 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
      */
     public void setHost(ICarLinkTaskViewHost host) {
         mHost = host;
+        if (mSurfaceCreated) {
+            // The surface arrived before the host; hand it over now (surfaceCreated() does
+            // the same when it comes second).
+            notifySurfaceCreated();
+        }
         maybeInitialized();
     }
 
@@ -242,7 +247,13 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
             } catch (RemoteException e) {
                 Log.e(TAG, "exception in release", e);
             }
+            mHost = null;
         }
+        // The client stub stays referenced by the (remote) host until it processes the release
+        // above, and the stub references this view; drop the callback so the chain back to the
+        // embedding activity is not kept alive longer than the view itself.
+        mCallback = null;
+        mTaskInfo = null;
     }
 
     private void maybeInitialized() {
@@ -257,17 +268,22 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         mSurfaceCreated = true;
-        if (mHost != null) {
-            try {
-                // A copy is sent because the host must be able to reparent the task leash under
-                // this surface from the SystemUI process; SurfaceControl is parcelable.
-                mHost.notifySurfaceCreated(new SurfaceControl(getSurfaceControl(),
-                        "carlink-copy"));
-            } catch (RemoteException e) {
-                Log.e(TAG, "exception in notifySurfaceCreated", e);
-            }
-        }
+        notifySurfaceCreated();
         maybeInitialized();
+    }
+
+    private void notifySurfaceCreated() {
+        if (mHost == null || mReleased) {
+            return;
+        }
+        try {
+            // A copy is sent because the host must be able to reparent the task leash under
+            // this surface from the SystemUI process; SurfaceControl is parcelable.
+            mHost.notifySurfaceCreated(new SurfaceControl(getSurfaceControl(),
+                    "carlink-copy"));
+        } catch (RemoteException e) {
+            Log.e(TAG, "exception in notifySurfaceCreated", e);
+        }
     }
 
     @Override

@@ -19,7 +19,10 @@ package com.carlink.launcher;
 import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
@@ -37,8 +40,10 @@ import com.carlink.launcher.taskview.TaskViewServiceClient;
 import com.carlink.taskview.ICarLinkTaskViewHost;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.Executor;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
@@ -78,7 +83,15 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     }
 
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
-    private final Executor mLoadExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService mLoadExecutor = Executors.newSingleThreadExecutor();
+
+    /** Reloads the side bar app list when packages are installed, removed or changed. */
+    private final BroadcastReceiver mPackageChangeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            loadApps();
+        }
+    };
 
     private TaskViewServiceClient mServiceClient;
     private AppListAdapter mAppListAdapter;
@@ -113,14 +126,27 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         mServiceClient = new TaskViewServiceClient(this, this);
         mServiceClient.bind();
 
+        // Keep the side bar in sync with (un)installs while this UI is alive. These are
+        // protected system broadcasts, so the flagless overload is exempt from the
+        // Android 14 receiver-exported requirement; context-registered (not via the
+        // manifest) so package changes do not start the process when the UI is gone.
+        IntentFilter packageChanges = new IntentFilter();
+        packageChanges.addAction(Intent.ACTION_PACKAGE_ADDED);
+        packageChanges.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        packageChanges.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        packageChanges.addDataScheme("package");
+        registerReceiver(mPackageChangeReceiver, packageChanges);
+
         loadApps();
     }
 
     @Override
     protected void onDestroy() {
+        unregisterReceiver(mPackageChangeReceiver);
         releaseSlot(mMainSlot);
         releaseSlot(mSecondarySlot);
         mServiceClient.unbind();
+        mLoadExecutor.shutdown();
         super.onDestroy();
     }
 
@@ -145,16 +171,29 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         mLoadExecutor.execute(() -> {
             PackageManager pm = getPackageManager();
             Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
-            List<ResolveInfo> resolved = pm.queryIntentActivities(query, 0);
+            // In-tree privapp (platform_apis, minSdk = platform), so the API 33
+            // ResolveInfoFlags overload can be used directly.
+            List<ResolveInfo> resolved =
+                    pm.queryIntentActivities(query, PackageManager.ResolveInfoFlags.of(0));
             List<AppInfo> apps = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
             for (ResolveInfo info : resolved) {
                 String pkg = info.activityInfo.packageName;
                 if (getPackageName().equals(pkg)) {
                     continue; // Do not offer embedding ourselves.
                 }
+                if (!seen.add(pkg)) {
+                    continue; // One row per package: slots track packages, not activities.
+                }
                 apps.add(new AppInfo(pkg, info.loadLabel(pm), info.loadIcon(pm)));
             }
-            mMainHandler.post(() -> mAppListAdapter.setApps(apps));
+            mMainHandler.post(() -> {
+                // The query may finish after onDestroy (the executor is only shut down
+                // there); never push results into a dead UI.
+                if (!isDestroyed()) {
+                    mAppListAdapter.setApps(apps);
+                }
+            });
         });
     }
 
@@ -191,11 +230,15 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     private void embed(Slot slot, AppInfo app) {
         if (!mServiceClient.isReady()) {
             Toast.makeText(this, R.string.toast_service_not_ready, Toast.LENGTH_SHORT).show();
+            // The caller may have just released this slot for replacement; keep the layout
+            // and the side bar highlight in sync with the actual slot state.
+            updateLayout();
             return;
         }
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(app.packageName);
         if (launchIntent == null) {
             Log.w(TAG, "no launch intent for " + app.packageName);
+            updateLayout();
             return;
         }
 
@@ -207,6 +250,12 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         taskView.setCallback(new CarLinkTaskView.Callback() {
             @Override
             public void onInitialized() {
+                if (slot.taskView != taskView || slot.pendingLaunch == null) {
+                    // Stale callback: the slot was cleared or reused while this task view
+                    // was initializing (same identity guard as onTaskVanished below), so
+                    // this embed must not launch anything into the slot's new owner.
+                    return;
+                }
                 // The launch display rides in the options bundle all the way into
                 // TaskViewTransitions, so the new task is created on the car virtual display.
                 ActivityOptions options = ActivityOptions.makeBasic();
@@ -218,6 +267,11 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
 
             @Override
             public void onTaskVanished(android.app.ActivityManager.RunningTaskInfo taskInfo) {
+                if (slot.taskView != taskView) {
+                    // Stale callback: the slot was already cleared or reused while this
+                    // binder call was in flight (e.g. queued right before the host died).
+                    return;
+                }
                 Log.i(TAG, "task vanished in slot: " + taskInfo.taskId);
                 clearSlot(slot, true /* releaseHost */);
                 updateLayout();
@@ -232,6 +286,9 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
             slot.taskView = null;
             slot.packageName = null;
             slot.pendingLaunch = null;
+            // Same as the early returns above: restore layout/highlight consistency after
+            // a failed replacement (the slot may have just been released by the caller).
+            updateLayout();
             return;
         }
         taskView.setHost(host);

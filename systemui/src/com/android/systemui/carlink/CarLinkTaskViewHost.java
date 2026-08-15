@@ -17,6 +17,7 @@
 package com.android.systemui.carlink;
 
 import android.content.Context;
+import android.os.Binder;
 import android.util.Slog;
 
 import com.android.systemui.CoreStartable;
@@ -32,6 +33,7 @@ import dagger.multibindings.IntoMap;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 
@@ -54,6 +56,13 @@ public class CarLinkTaskViewHost implements CoreStartable {
     private static final String TAG = "CarLinkTaskViewHost";
 
     private static volatile CarLinkTaskViewHost sInstance;
+
+    /**
+     * Maximum number of live task views a single calling uid may hold. Each server registers a
+     * ShellTaskOrganizer listener and owns a SurfaceView, so a buggy (or malicious, if the
+     * signing key leaks) privileged client must not be able to allocate them without bound.
+     */
+    private static final int MAX_TASK_VIEWS_PER_UID = 8;
 
     private final Context mContext;
     private final Executor mMainExecutor;
@@ -83,15 +92,34 @@ public class CarLinkTaskViewHost implements CoreStartable {
      * Creates the server side of a new task view pair for the given client. Called from
      * {@link CarLinkTaskViewService} on a binder thread; the returned binder is valid
      * immediately while the underlying TaskView is created asynchronously.
+     *
+     * <p>The permission is re-checked here (in addition to the service entry point) so the gate
+     * and the per-uid limit hold even if another in-process caller is added later. Both must be
+     * evaluated on the caller's binder thread: the calling identity is only valid while the
+     * binder transaction is being dispatched.
      */
     public ICarLinkTaskViewHost createTaskView(ICarLinkTaskViewClient client) {
+        CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
+        Objects.requireNonNull(client, "client");
         if (mTaskViewFactory.isEmpty()) {
             // TaskViewFactory is absent when WMShell does not run in this process.
             throw new IllegalStateException("TaskViewFactory is not available in SystemUI");
         }
-        CarLinkTaskViewServerImpl server =
-                new CarLinkTaskViewServerImpl(mContext, mMainExecutor, client, this);
+        final int callingUid = Binder.getCallingUid();
+        CarLinkTaskViewServerImpl server;
         synchronized (mServers) {
+            int countForUid = 0;
+            for (CarLinkTaskViewServerImpl s : mServers) {
+                if (s.getOwnerUid() == callingUid) {
+                    countForUid++;
+                }
+            }
+            if (countForUid >= MAX_TASK_VIEWS_PER_UID) {
+                throw new IllegalStateException("Too many live task views for uid " + callingUid
+                        + " (max " + MAX_TASK_VIEWS_PER_UID + ")");
+            }
+            server = new CarLinkTaskViewServerImpl(mContext, mMainExecutor, client, this,
+                    callingUid);
             mServers.add(server);
         }
         server.init(mTaskViewFactory.get());

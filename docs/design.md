@@ -120,8 +120,13 @@ ShellTaskOrganizer / TaskViewTransitions / SyncTransactionQueue——可注入�
 ## 7. 权限与进程模型
 
 - 自定义签名权限 `com.carlink.permission.MANAGE_TASK_VIEW`（由 launcher 定义）：
-  manifest 闸门（bind 时校验）+ `createTaskView` 内 `checkCallingPermission` 二次校验，
+  manifest 闸门（bind 时校验）+ 服务端每个 binder 入口首语句重查（`createTaskView`
+  及 host 上的每个方法；必须在 binder 线程上查，跳线程后调用方身份即丢失），
   SystemUI 进程内调用放行（`Binder.getCallingPid() == Process.myPid()`）。
+- 资源上限：单个 calling uid 最多持有 8 个存活 task view（`MAX_TASK_VIEWS_PER_UID`）；
+  TaskView 异步创建期间排队的 binder 调用上限 32（`MAX_PENDING_OPS`，超出丢弃）；
+  client binder 已 linkToDeath，客户端进程死亡即走幂等 release，服务端不泄漏。
 - launcher 与 SystemUI 各自编译同一份 `com.carlink.taskview` AIDL 契约。
-- 断线：SystemUI 死亡 → linkToDeath/onServiceDisconnected → launcher 清空槽位并延迟重连
-  （重连骨架：1s 后重 bind；重新嵌入由用户点击触发）。
+- 断线：SystemUI 死亡 → linkToDeath/onServiceDisconnected → launcher 清空槽位并重连
+  （指数退避：1s 起每次倍增、15s 封顶，绑定成功后复位；并发触发合并为单次待重试；
+  重新嵌入由用户点击触发）。

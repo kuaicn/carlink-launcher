@@ -33,9 +33,9 @@ import com.carlink.taskview.ICarLinkTaskViewService;
 /**
  * Client of the SystemUI-side {@code CarLinkTaskViewService}.
  *
- * <p>Wraps bind/unbind, death detection and a minimal reconnect skeleton. The binder calls are
- * expected to be made from the main thread; SystemUI is a persistent process so the initial bind
- * returns quickly.
+ * <p>Wraps bind/unbind, death detection and reconnect with exponential backoff. The binder calls
+ * are expected to be made from the main thread; SystemUI is a persistent process so the initial
+ * bind returns quickly.
  */
 public class TaskViewServiceClient {
     private static final String TAG = "CarLinkLauncher";
@@ -44,7 +44,8 @@ public class TaskViewServiceClient {
     public static final String ACTION_BIND_TASK_VIEW_SERVICE =
             "com.carlink.taskview.action.BIND_TASK_VIEW_SERVICE";
     private static final String SYSTEMUI_PACKAGE = "com.android.systemui";
-    private static final long REBIND_DELAY_MS = 1000;
+    private static final long REBIND_INITIAL_DELAY_MS = 1000;
+    private static final long REBIND_MAX_DELAY_MS = 15000;
 
     /** Listener for service availability changes. Called on the main thread. */
     public interface Listener {
@@ -61,10 +62,19 @@ public class TaskViewServiceClient {
 
     private ICarLinkTaskViewService mService;
     private boolean mBound;
+    /** Current rebind backoff; reset to {@link #REBIND_INITIAL_DELAY_MS} on a successful bind. */
+    private long mRebindDelayMs = REBIND_INITIAL_DELAY_MS;
+    /** Single rebind callback instance so a pending retry can be coalesced and cancelled. */
+    private final Runnable mRebindRunnable = this::bind;
 
     private final ServiceConnection mConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
+            if (!mBound) {
+                // Stale callback: the framework dispatched it to the main thread before
+                // unbind() ran, so the connection it belongs to is already torn down.
+                return;
+            }
             Log.i(TAG, "task view service connected");
             mService = ICarLinkTaskViewService.Stub.asInterface(service);
             try {
@@ -75,6 +85,7 @@ public class TaskViewServiceClient {
                 scheduleRebind();
                 return;
             }
+            mRebindDelayMs = REBIND_INITIAL_DELAY_MS;
             mListener.onServiceReady();
         }
 
@@ -105,9 +116,24 @@ public class TaskViewServiceClient {
         }
         Intent intent = new Intent(ACTION_BIND_TASK_VIEW_SERVICE)
                 .setPackage(SYSTEMUI_PACKAGE);
-        mBound = mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+        try {
+            mBound = mContext.bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+        } catch (SecurityException e) {
+            // Thrown instead of returning false when the service exists but is protected by a
+            // permission we lack (e.g. a differently-signed SystemUI build); without this catch
+            // the hosting activity would crash in onCreate.
+            // Warn (not error): the rebind retries would repeat this line forever.
+            Log.w(TAG, "no permission to bind task view service", e);
+            scheduleRebind();
+            return;
+        }
         if (!mBound) {
-            Log.e(TAG, "failed to bind task view service");
+            // The service does not exist (SystemUI without the CarLink patch, or not restarted
+            // yet): keep retrying on the backoff schedule; the attempts are cheap and the
+            // bridge then comes up on its own once the service appears.
+            // Warn (not error): a missing service is recoverable and retried, an endless error
+            // stream would drown real failures.
+            Log.w(TAG, "failed to bind task view service, will retry");
             scheduleRebind();
         }
     }
@@ -119,7 +145,11 @@ public class TaskViewServiceClient {
             mContext.unbindService(mConnection);
             mBound = false;
         }
-        mService = null;
+        if (mService != null) {
+            // Otherwise a binderDied() queued from before the unbind could still post a rebind.
+            mService.asBinder().unlinkToDeath(mDeathRecipient, 0);
+            mService = null;
+        }
     }
 
     /** True when the service is bound and usable. */
@@ -145,14 +175,21 @@ public class TaskViewServiceClient {
     }
 
     private void handleServiceGone() {
-        mService = null;
-        mListener.onServiceGone();
-        scheduleRebind();
+        // binderDied() runs on a binder thread; hop to the main thread so that the listener
+        // (which tears down views) is serialized with bind()/unbind().
+        mMainHandler.post(() -> {
+            if (mService == null && !mBound) {
+                // Process death fires both binderDied() and onServiceDisconnected(); the first
+                // call handles it. This state is also reached when unbind() ran meanwhile.
+                return;
+            }
+            mService = null;
+            mListener.onServiceGone();
+            scheduleRebind();
+        });
     }
 
     private void scheduleRebind() {
-        // Reconnect skeleton: a plain delayed rebind is enough for v1 because SystemUI is a
-        // persistent process that is restarted immediately by the framework.
         if (mBound) {
             try {
                 mContext.unbindService(mConnection);
@@ -161,6 +198,13 @@ public class TaskViewServiceClient {
             }
             mBound = false;
         }
-        mMainHandler.postDelayed(this::bind, REBIND_DELAY_MS);
+        // Coalesce concurrent triggers (e.g. binderDied plus a failing rebind attempt for the
+        // same death) into a single pending retry.
+        mMainHandler.removeCallbacks(mRebindRunnable);
+        // Exponential backoff capped at REBIND_MAX_DELAY_MS: a crash-looping or unpatched
+        // SystemUI must not be pounded with a bind attempt every second. The delay is reset
+        // in onServiceConnected.
+        mMainHandler.postDelayed(mRebindRunnable, mRebindDelayMs);
+        mRebindDelayMs = Math.min(mRebindDelayMs * 2, REBIND_MAX_DELAY_MS);
     }
 }

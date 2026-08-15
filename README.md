@@ -40,7 +40,7 @@ carlink-launcher/
 │       ├── AppInfo.java / AppListAdapter.java   # 纯 framework View 的列表
 │       └── taskview/
 │           ├── CarLinkTaskView.java           # SurfaceView 客户端（改自 AAOS RemoteCarTaskView）
-│           └── TaskViewServiceClient.java     # bind 服务 + 断线重连骨架 + linkToDeath
+│           └── TaskViewServiceClient.java     # bind 服务 + 指数退避重连（1s 起倍增、15s 封顶）+ linkToDeath
 ├── res/                        # 布局/中文文案/系统主题
 ├── systemui/                   # SystemUI 补丁镜像 + 放置说明（与树内文件一致）
 │   └── README.md               #   每个文件拷贝到树内哪个路径、手工注册点清单
@@ -61,7 +61,8 @@ carlink-launcher/
   2. 主槽空 → 嵌入主槽；
   3. 副槽空 → 嵌入副槽；
   4. 都满 → 替换主槽（旧 TaskView release，task 随之从 WM 移除），副槽不动。
-- 左栏对"主槽当前 app"做选中高亮。
+- 左栏对"主槽当前 app"做选中高亮；应用安装/卸载/变更时左栏自动刷新（context 注册的
+  package 广播，UI 销毁即注销）。
 - task 退出（用户在被嵌入 app 内按返回直至 finish，或进程死亡）→ `onTaskVanished` →
   槽位置空并刷新布局。
 

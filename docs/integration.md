@@ -22,8 +22,11 @@ vendor/carlink/launcher/
 ```makefile
 PRODUCT_PACKAGES += \
     CarLinkInterconnect \
-    CarLinkLauncher \
-    privapp-permissions-carlink.xml
+    CarLinkLauncher
+
+# privapp 白名单随 PRODUCT_COPY_FILES 装入 system/etc/permissions（与 priv-app 同分区）
+PRODUCT_COPY_FILES += \
+    vendor/carlink/config/privapp-permissions-carlink.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-carlink.xml
 ```
 
 `vendor/carlink/config/privapp-permissions-carlink.xml` 追加白名单块：
