@@ -31,8 +31,9 @@ import java.util.Objects;
 /**
  * Adapter backing the launcher side bar. Pure framework views only (no androidx).
  *
- * <p>The apps currently embedded in the main / secondary slots are highlighted, mirroring
- * the v1 slot policy.
+ * <p>Two-level highlight mirroring the slot state: every app currently embedded in a slot is
+ * highlighted ({@code app_item_selected_background}); the app embedded in the currently
+ * selected slot gets the stronger {@code app_item_active_slot_background}.
  */
 public class AppListAdapter extends BaseAdapter {
     private final LayoutInflater mInflater;
@@ -41,6 +42,8 @@ public class AppListAdapter extends BaseAdapter {
     /** Package names of the apps currently embedded in the two slots, or null. */
     private String mMainSlotPackage;
     private String mSecondarySlotPackage;
+    /** Package embedded in the currently selected slot, or null when that slot is empty. */
+    private String mSelectedSlotPackage;
 
     public AppListAdapter(Context context) {
         mInflater = LayoutInflater.from(context);
@@ -62,6 +65,15 @@ public class AppListAdapter extends BaseAdapter {
         }
         mMainSlotPackage = mainSlotPackage;
         mSecondarySlotPackage = secondarySlotPackage;
+        notifyDataSetChanged();
+    }
+
+    /** Sets the package highlighted as the content of the currently selected slot. */
+    public void setSelectedSlotPackage(String selectedSlotPackage) {
+        if (Objects.equals(mSelectedSlotPackage, selectedSlotPackage)) {
+            return; // Same no-op guard as setSlotPackages above.
+        }
+        mSelectedSlotPackage = selectedSlotPackage;
         notifyDataSetChanged();
     }
 
@@ -96,11 +108,14 @@ public class AppListAdapter extends BaseAdapter {
         AppInfo app = getItem(position);
         holder.icon.setImageDrawable(app.icon);
         holder.label.setText(app.label);
+        boolean selected = app.packageName.equals(mSelectedSlotPackage);
         boolean embedded = app.packageName.equals(mMainSlotPackage)
                 || app.packageName.equals(mSecondarySlotPackage);
-        view.setBackgroundResource(embedded
-                ? R.drawable.app_item_selected_background
-                : android.R.color.transparent);
+        view.setBackgroundResource(selected
+                ? R.drawable.app_item_active_slot_background
+                : embedded
+                        ? R.drawable.app_item_selected_background
+                        : android.R.color.transparent);
         return view;
     }
 

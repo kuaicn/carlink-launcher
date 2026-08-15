@@ -110,6 +110,9 @@ BAL 硬化拦截。AAOS 的解法照抄：SystemUI 侧在 `startActivity` 里给
 - 主/副槽互不知道对方；task 互不共享 TaskViewTaskController，生命周期互不影响。
 - 槽位为空时容器 GONE，SurfaceView 随之销毁 → `notifySurfaceDestroyed` → 服务端 task 隐藏；
   但 v1 策略下"槽位置空"总是伴随 release，不存在保活隐藏 task 的需求。
+- 槽位选中态是 launcher 侧纯 UI 模型（`LauncherActivity.mSelectedSlot`，任一时刻恰好一个，
+  置空时自动落到另一占用槽），不参与 host/client 协议；选中槽画圆角描边，容器
+  clipToOutline + `SurfaceView.setCornerRadius` 保证嵌入内容同圆角。
 
 ## 6. 与 AAOS 的差异（裁剪说明）
 

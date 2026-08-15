@@ -61,8 +61,14 @@ carlink-launcher/
   2. 主槽空 → 嵌入主槽；
   3. 副槽空 → 嵌入副槽；
   4. 都满 → 替换主槽（旧 TaskView release，task 随之从 WM 移除），副槽不动。
-- 左栏对"主槽当前 app"做选中高亮；应用安装/卸载/变更时左栏自动刷新（context 注册的
-  package 广播，UI 销毁即注销）。
+- 任一时刻恰好一个槽位处于"选中态"（默认主槽）：选中槽容器画 3dp 圆角高亮描边
+  （GradientDrawable + 容器 clipToOutline 圆角裁剪；嵌入内容是 SurfaceView，用
+  `SurfaceView.setCornerRadius`（@hide，平台签名 privapp 可用）同时圆角化 surface 层与
+  打孔），未选中槽无描边。点槽位的内容外圈（容器 padding 环；内容本身的触摸直达被嵌入
+  task，不经过本窗口）或从左栏嵌入/置前某 app 都会把选中态切到该槽；选中槽被置空
+  （task 退出、看门狗、服务断开）且另一槽占用时，选中态自动落到占用的槽上。
+- 左栏对已嵌入的 app 做高亮，其中"选中槽"的 app 用更强一档的高亮；应用安装/卸载/变更时
+  左栏自动刷新（context 注册的 package 广播，UI 销毁即注销）。
 - task 退出（用户在被嵌入 app 内按返回直至 finish，或进程死亡）→ `onTaskVanished` →
   槽位置空并刷新布局。
 

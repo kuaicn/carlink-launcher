@@ -49,11 +49,16 @@
             android:layout_height="match_parent"
             android:orientation="horizontal">
 
+            <!-- The padding insets the embedded content by the width of the selection ring
+                 (plus a hair of separation); the ring itself is the slot background, swapped
+                 in code, and the only part of an occupied slot that still receives clicks in
+                 this window, since touches on the content fall through to the embedded task. -->
             <FrameLayout
                 android:id="@+id/main_container"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:padding="@dimen/slot_border_padding"
                 android:visibility="gone" />
 
             <FrameLayout
@@ -61,6 +66,7 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
+                android:padding="@dimen/slot_border_padding"
                 android:visibility="gone" />
         </LinearLayout>
 

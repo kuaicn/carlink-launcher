@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Content slot geometry: the container outline and the selection ring are rounded at
+         slot_corner_radius; the embedded content is inset by slot_border_padding (the ring
+         area, also the container's touch target for slot selection), so its own corner
+         radius is slot_corner_radius - slot_border_padding to stay concentric with the ring
+         (computed in LauncherActivity). -->
+    <dimen name="slot_corner_radius">12dp</dimen>
+    <dimen name="slot_border_width">3dp</dimen>
+    <dimen name="slot_border_padding">4dp</dimen>
+</resources>

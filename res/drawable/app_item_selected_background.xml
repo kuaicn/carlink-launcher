@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Selection highlight for the apps currently embedded in the slots. -->
+<!-- Base highlight for the apps currently embedded in the slots; the app in the selected
+     slot uses the stronger app_item_active_slot_background instead. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <solid android:color="#33445566" />

@@ -26,11 +26,13 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.Configuration;
+import android.graphics.Outline;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ListView;
@@ -63,6 +65,16 @@ import java.util.concurrent.Executors;
  *     <li>secondary slot empty: embed into the secondary slot;</li>
  *     <li>both occupied: replace the main slot (its task view is released); secondary is kept.</li>
  * </ul>
+ *
+ * <p>Slot selection: exactly one of the two slots is "selected" at any time
+ * ({@link #mSelectedSlot}, main by default), shown as a rounded highlight ring around the
+ * slot container. The selection moves when a slot is clicked (its padding ring is the only
+ * part of an occupied slot that still receives clicks in this window — touches on the
+ * content itself fall through to the embedded task) and to the slot a new app is embedded
+ * into. When the selected slot is emptied while the other slot is occupied (task vanished,
+ * embed watchdog, service loss), the selection moves to the occupied one in
+ * {@link #updateLayout()}, so the ring always tracks real content when there is any; with
+ * both slots empty it simply stays where it was.
  */
 public class LauncherActivity extends Activity implements TaskViewServiceClient.Listener {
     private static final String TAG = "CarLinkLauncher";
@@ -110,9 +122,17 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     private AppListAdapter mAppListAdapter;
     private Slot mMainSlot;
     private Slot mSecondarySlot;
+    /**
+     * The currently selected slot; never null after onCreate. Invariant: exactly one of the
+     * two slots is selected at any time (see the class javadoc).
+     */
+    private Slot mSelectedSlot;
     private View mEmptyHint;
     private TextView mAppListEmpty;
     private int mDisplayId;
+    /** Corner radii in px: the container outline / selection ring, and the embedded content. */
+    private float mSlotCornerRadiusPx;
+    private float mSlotContentCornerRadiusPx;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -129,7 +149,14 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
 
         mMainSlot = new Slot(findViewById(R.id.main_container));
         mSecondarySlot = new Slot(findViewById(R.id.secondary_container));
+        mSelectedSlot = mMainSlot; // default selection, kept even while both slots are empty.
         mEmptyHint = findViewById(R.id.empty_hint);
+
+        mSlotCornerRadiusPx = getResources().getDimension(R.dimen.slot_corner_radius);
+        mSlotContentCornerRadiusPx =
+                mSlotCornerRadiusPx - getResources().getDimension(R.dimen.slot_border_padding);
+        setupSlotContainer(mMainSlot);
+        setupSlotContainer(mSecondarySlot);
 
         mAppListAdapter = new AppListAdapter(this);
         ListView appList = findViewById(R.id.app_list);
@@ -155,6 +182,9 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         packageChanges.addDataScheme("package");
         registerReceiver(mPackageChangeReceiver, packageChanges);
 
+        // Apply the initial selection visuals (both slots empty: the ring lands on the main
+        // slot's container, which is still GONE at this point).
+        updateLayout();
         loadApps();
     }
 
@@ -241,23 +271,66 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     }
 
     private void onAppClicked(AppInfo app) {
-        // v1 slot policy (see class javadoc).
+        // v1 slot policy (see class javadoc). The slot the click operates on becomes the
+        // selected one: the already-embedded slot when bringing to front, otherwise the slot
+        // the app is newly embedded into.
         if (app.packageName.equals(mMainSlot.packageName)) {
+            selectSlot(mMainSlot);
             showEmbeddedTask(mMainSlot);
             return;
         }
         if (app.packageName.equals(mSecondarySlot.packageName)) {
+            selectSlot(mSecondarySlot);
             showEmbeddedTask(mSecondarySlot);
             return;
         }
         if (!mMainSlot.isOccupied()) {
-            embed(mMainSlot, app);
+            if (embed(mMainSlot, app)) {
+                selectSlot(mMainSlot);
+            }
         } else if (!mSecondarySlot.isOccupied()) {
-            embed(mSecondarySlot, app);
+            if (embed(mSecondarySlot, app)) {
+                selectSlot(mSecondarySlot);
+            }
         } else {
             releaseSlot(mMainSlot);
-            embed(mMainSlot, app);
+            if (embed(mMainSlot, app)) {
+                selectSlot(mMainSlot);
+            }
         }
+    }
+
+    /** Marks the given slot as selected and refreshes the selection visuals. */
+    private void selectSlot(Slot slot) {
+        if (mSelectedSlot == slot) {
+            return;
+        }
+        mSelectedSlot = slot;
+        updateLayout();
+    }
+
+    /**
+     * Rounds the slot container and wires click-to-select. The outline provider must not
+     * derive from the background (ViewOutlineProvider.BACKGROUND): the unselected slot has a
+     * null background, which would produce an empty outline and, with clipToOutline, clip the
+     * embedded content away entirely.
+     *
+     * <p>The click listener deliberately lives on the container instead of a touch intercept:
+     * touches on the embedded content fall through to the embedded task (the task view punches
+     * the window's touchable region), so they must not and cannot be caught here; only touches
+     * on the padding ring around the content reach this listener.
+     */
+    private void setupSlotContainer(Slot slot) {
+        FrameLayout container = slot.container;
+        container.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(),
+                        mSlotCornerRadiusPx);
+            }
+        });
+        container.setClipToOutline(true);
+        container.setOnClickListener(v -> selectSlot(slot));
     }
 
     private void showEmbeddedTask(Slot slot) {
@@ -269,20 +342,24 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     /**
      * Embeds the given app into the slot. The actual activity start is deferred until the task
      * view reports initialized (host bound + surface created).
+     *
+     * @return false when the embed could not even be set up (service not ready, no launch
+     *     intent, host creation failure); the slot is left empty then. Later failures surface
+     *     asynchronously through the embed watchdog or onTaskVanished.
      */
-    private void embed(Slot slot, AppInfo app) {
+    private boolean embed(Slot slot, AppInfo app) {
         if (!mServiceClient.isReady()) {
             Toast.makeText(this, R.string.toast_service_not_ready, Toast.LENGTH_SHORT).show();
             // The caller may have just released this slot for replacement; keep the layout
             // and the side bar highlight in sync with the actual slot state.
             updateLayout();
-            return;
+            return false;
         }
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(app.packageName);
         if (launchIntent == null) {
             Log.w(TAG, "no launch intent for " + app.packageName);
             updateLayout();
-            return;
+            return false;
         }
         // Always launch a fresh task: reusing an existing (recents or already visible) task
         // produces a TRANSIT_TO_FRONT transition, which TaskViewTransitions only claims on
@@ -292,6 +369,11 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
 
         CarLinkTaskView taskView = new CarLinkTaskView(this);
+        // Round the corners of the embedded content to match the container ring: the hidden
+        // SurfaceView API rounds both the surface layer and the hole punched for it (usable
+        // here: in-tree platform-signed privapp, platform_apis build). The radius is the
+        // container's minus the padding, so the content arc stays concentric with the ring.
+        taskView.setCornerRadius(mSlotContentCornerRadiusPx);
         slot.taskView = taskView;
         slot.packageName = app.packageName;
         slot.pendingLaunch = PendingIntent.getActivity(this, 0 /* requestCode */, launchIntent,
@@ -352,12 +434,13 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
             // Same as the early returns above: restore layout/highlight consistency after
             // a failed replacement (the slot may have just been released by the caller).
             updateLayout();
-            return;
+            return false;
         }
         taskView.setHost(host);
 
         slot.container.addView(taskView);
         updateLayout();
+        return true;
     }
 
     /** Releases the task view of an occupied slot and empties it. */
@@ -399,14 +482,33 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         }
     }
 
-    /** Updates container visibility and the side bar highlight to match the slot state. */
+    /**
+     * Updates container visibility, the selection ring and the side bar highlight to match the
+     * slot state. Single funnel for every slot mutation; also maintains the selection
+     * invariant (exactly one selected slot, on real content whenever there is any).
+     */
     private void updateLayout() {
+        if (!mSelectedSlot.isOccupied()) {
+            // The selected slot is empty: when the other slot is occupied the selection moves
+            // there (e.g. the selected slot's task just vanished), so the ring always tracks
+            // real content; when both are empty it simply stays where it is.
+            Slot other = mSelectedSlot == mMainSlot ? mSecondarySlot : mMainSlot;
+            if (other.isOccupied()) {
+                mSelectedSlot = other;
+            }
+        }
         mMainSlot.container.setVisibility(
                 mMainSlot.isOccupied() ? View.VISIBLE : View.GONE);
         mSecondarySlot.container.setVisibility(
                 mSecondarySlot.isOccupied() ? View.VISIBLE : View.GONE);
         boolean anyOccupied = mMainSlot.isOccupied() || mSecondarySlot.isOccupied();
         mEmptyHint.setVisibility(anyOccupied ? View.GONE : View.VISIBLE);
+        // Resource 0 clears the background: the unselected slot gets no ring.
+        mMainSlot.container.setBackgroundResource(mSelectedSlot == mMainSlot
+                ? R.drawable.slot_selected_background : 0);
+        mSecondarySlot.container.setBackgroundResource(mSelectedSlot == mSecondarySlot
+                ? R.drawable.slot_selected_background : 0);
         mAppListAdapter.setSlotPackages(mMainSlot.packageName, mSecondarySlot.packageName);
+        mAppListAdapter.setSelectedSlotPackage(mSelectedSlot.packageName);
     }
 }

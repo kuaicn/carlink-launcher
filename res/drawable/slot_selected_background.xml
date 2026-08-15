@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Selection ring of the currently selected content slot: a rounded highlight stroke with a
+     transparent fill so the embedded content (the punched SurfaceView hole) shows through.
+     The matching rounded outline clip is installed in code (LauncherActivity.setupSlotContainer);
+     the unselected slot simply gets a null background, i.e. no ring. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+    <stroke
+        android:width="@dimen/slot_border_width"
+        android:color="#FF8AB4F8" />
+    <corners android:radius="@dimen/slot_corner_radius" />
+</shape>
