@@ -97,6 +97,12 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
                     return;
                 }
                 mTaskInfo = taskInfo;
+                // The launch-time bounds are only a hint consumed by the open transition; push
+                // the authoritative slot bounds now that the task exists, mirroring
+                // ControlledRemoteCarTaskView.onTaskAppeared. This is what makes the WM-side
+                // input region land on the slot even when the open transition dropped them
+                // (e.g. non-resizeable apps demoted to a fullscreen windowing mode).
+                updateWindowBounds();
                 if (mCallback != null) {
                     mCallback.onTaskAppeared(taskInfo);
                 }
@@ -181,9 +187,20 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
             Log.w(TAG, "startActivity() before the task view is initialized, ignored");
             return;
         }
+        // Hand the current slot rect over as launch bounds (mirrors
+        // ControlledRemoteCarTaskView): the WM-side task is then created with the final bounds
+        // right away instead of relying solely on the server-side bounds cache. The bounds
+        // decide where the input region lands, not just the visible crop.
+        Rect launchBounds = null;
+        if (getWidth() > 0 && getHeight() > 0) {
+            launchBounds = new Rect();
+            getBoundsOnScreen(launchBounds);
+        }
+        // A zero-size view means the slot was never laid out; keep null launch bounds and let
+        // the server fall back to its cached bounds (getCurrentBoundsOnScreen()).
         try {
             mHost.startActivity(pendingIntent, null /* fillInIntent */, options.toBundle(),
-                    null /* launchBounds */);
+                    launchBounds);
         } catch (RemoteException e) {
             Log.e(TAG, "exception in startActivity", e);
         }

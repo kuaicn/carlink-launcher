@@ -65,6 +65,13 @@ import java.util.concurrent.Executors;
 public class LauncherActivity extends Activity implements TaskViewServiceClient.Listener {
     private static final String TAG = "CarLinkLauncher";
 
+    /**
+     * How long to wait for onTaskAppeared after startActivity before giving up on the embed.
+     * Covers the broken-embed case (e.g. the shell transition was not claimed by the task
+     * view transitions) that would otherwise leave the slot permanently black.
+     */
+    private static final long EMBED_TIMEOUT_MS = 3000;
+
     /** One content slot: a container view plus, while occupied, a CarLinkTaskView. */
     private static final class Slot {
         final FrameLayout container;
@@ -72,6 +79,8 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         String packageName;
         /** App launch pending while the task view initializes; consumed in onInitialized. */
         PendingIntent pendingLaunch;
+        /** Embed watchdog posted at launch; cancelled when the task appears or the slot clears. */
+        Runnable embedWatchdog;
 
         Slot(FrameLayout container) {
             this.container = container;
@@ -241,6 +250,12 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
             updateLayout();
             return;
         }
+        // Always launch a fresh task: reusing an existing (recents or already visible) task
+        // produces a TRANSIT_TO_FRONT transition, which TaskViewTransitions only claims on
+        // bubble-enabled builds; on this build it would be treated as alien and the slot
+        // would stay black. NEW_TASK|MULTIPLE_TASK forces the new-task path that is matched
+        // via the launch cookie instead.
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
 
         CarLinkTaskView taskView = new CarLinkTaskView(this);
         slot.taskView = taskView;
@@ -263,6 +278,20 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
                     options.setLaunchDisplayId(mDisplayId);
                 }
                 taskView.startActivity(slot.pendingLaunch, options);
+                // Black-screen fallback: if the task never appears (the shell side cleaned
+                // it up without notifying the client), release the slot instead of leaving
+                // it black forever.
+                slot.embedWatchdog = () -> onEmbedTimeout(slot, taskView);
+                mMainHandler.postDelayed(slot.embedWatchdog, EMBED_TIMEOUT_MS);
+            }
+
+            @Override
+            public void onTaskAppeared(android.app.ActivityManager.RunningTaskInfo taskInfo) {
+                if (slot.taskView != taskView) {
+                    // Stale callback, see onTaskVanished below.
+                    return;
+                }
+                cancelEmbedWatchdog(slot);
             }
 
             @Override
@@ -303,6 +332,7 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     }
 
     private void clearSlot(Slot slot, boolean releaseHost) {
+        cancelEmbedWatchdog(slot);
         if (slot.taskView != null) {
             if (releaseHost) {
                 slot.taskView.release();
@@ -312,6 +342,27 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         }
         slot.packageName = null;
         slot.pendingLaunch = null;
+    }
+
+    /** Fired when no task appeared within {@link #EMBED_TIMEOUT_MS} of the launch. */
+    private void onEmbedTimeout(Slot slot, CarLinkTaskView taskView) {
+        if (slot.taskView != taskView) {
+            // Stale watchdog: the slot was cleared or reused while it was pending.
+            return;
+        }
+        slot.embedWatchdog = null;
+        Log.w(TAG, "no task appeared within " + EMBED_TIMEOUT_MS + "ms for "
+                + slot.packageName + ", releasing the slot");
+        clearSlot(slot, true /* releaseHost */);
+        updateLayout();
+        Toast.makeText(this, R.string.toast_embed_failed, Toast.LENGTH_LONG).show();
+    }
+
+    private void cancelEmbedWatchdog(Slot slot) {
+        if (slot.embedWatchdog != null) {
+            mMainHandler.removeCallbacks(slot.embedWatchdog);
+            slot.embedWatchdog = null;
+        }
     }
 
     /** Updates container visibility and the side bar highlight to match the slot state. */

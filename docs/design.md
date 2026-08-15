@@ -47,12 +47,18 @@ launcher (虚拟屏进程)                        SystemUI 进程
          new SurfaceControl(getSurfaceControl(), "carlink-copy"))
         ────oneway binder────────────────>  TaskView.getController().surfaceCreated(copy)
    surfaceChanged:
-     host.setWindowBounds(boundsOnScreen) ──> 服务端缓存（startActivity 时取用）
+     host.setWindowBounds(boundsOnScreen) ──> 服务端缓存（startActivity 时取用）；
+                                             task 已存在则经 TaskViewTransitions
+                                             .setTaskBounds 实时下发
 
 4. 点击应用图标 → onInitialized 后：
    PendingIntent.getActivity(launchIntent)
+     （launchIntent 强制 NEW_TASK|MULTIPLE_TASK：复用既有 task 的
+       TRANSIT_TO_FRONT 过渡在本构建不被 TaskViewTransitions 认领，
+       会被判 alien 清掉，槽位永久黑屏）
    ActivityOptions.makeBasic().setLaunchDisplayId(displayId)
-   host.startActivity(pi, null, options.toBundle(), null)
+   host.startActivity(pi, null, options.toBundle(), launchBounds)
+     （launchBounds = 槽位当前 bounds-on-screen；view 无尺寸时为 null）
         ────oneway binder────────────────>  options 补 BAL：
                                              setPendingIntentBackgroundActivityStartMode(
                                                MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS)
@@ -62,6 +68,7 @@ launcher (虚拟屏进程)                        SystemUI 进程
                                              WINDOWING_MODE_MULTI_WINDOW /
                                              removeWithTaskOrganizer；
                                              wct.sendPendingIntent + 过渡动画
+   （看门狗：3s 内未等到 onTaskAppeared → 清槽 + Toast"应用无法嵌入"）
 
 5. task 在虚拟屏创建（displayId 随 options bundle 一路带进 WCT）
    TaskViewTransitions 打开过渡：
@@ -69,7 +76,9 @@ launcher (虚拟屏进程)                        SystemUI 进程
      读回第 3 步缓存的客户端 bounds；
      leash reparent 到客户端 SurfaceControl 之下
         ────oneway binder────────────────>  client.onTaskAppeared(taskInfo, leash)
-   （launcher 只记录 taskInfo，无需再 reparent——shell 侧已完成）
+   （launcher 记录 taskInfo 并补推一次 updateWindowBounds()——launchBounds
+     只是打开过渡消费的提示，task 出现后再把权威槽位 bounds 下发给 WM，
+     输入区域由此可靠落到槽位；无需再 reparent——shell 侧已完成）
 
 6. 输入：leash 已挂在 launcher surface 层级
    → InputDispatcher 直接把触摸路由给被嵌入 task（零转发）
@@ -104,18 +113,26 @@ BAL 硬化拦截。AAOS 的解法照抄：SystemUI 侧在 `startActivity` 里给
 ## 6. 与 AAOS 的差异（裁剪说明）
 
 手机 SystemUI 的 Dagger 图（SysUIComponent）**不暴露** AAOS 服务端直接注入的
-ShellTaskOrganizer / TaskViewTransitions / SyncTransactionQueue——可注入的 WMShell 入口只有
-`Optional<TaskViewFactory>`（SystemUIInitializer 从 WMComponent 搬入）。因此：
+ShellTaskOrganizer / SyncTransactionQueue——可注入的 WMShell 入口只有
+`Optional<TaskViewFactory>` 与 `Optional<TaskViewTransitions>`
+（SystemUIInitializer 从 WMComponent 搬入；后者为打通运行时下发 bounds 而补的接线，
+见 WMComponent.getTaskViewTransitions）。因此：
 
 | AAOS 能力 | 本实现 | 说明 |
 | --- | --- | --- |
 | 直接 new TaskViewTaskController | TaskViewFactory.create → TaskView，替换其 TaskViewBase 为本桥 | TaskView 自身的 view 永不 attach |
 | release 时 removeTask | `TaskView.removeTask()` + `release()` | 等效 |
 | createRootTask(displayId)（RootTaskMediator） | **不支持**，服务端 log + 忽略 | 需要 ShellTaskOrganizer.createRootTask；v1 只嵌普通 activity task，故 RootTaskMediator 未移植 |
-| setWindowBounds 运行时改 task bounds | 仅缓存，下一次 startActivity 生效 | 需要 TaskViewTransitions.setTaskBounds，手机 SystemUI 拿不到；**v1 已知限制**：槽位尺寸变化（如副槽加入导致主槽收窄）时被嵌入 task 不会即时跟随缩放 |
+| setWindowBounds 运行时改 task bounds | 缓存 + task 存在时经 TaskViewTransitions.setTaskBounds 实时下发 | 与 AAOS 行为一致；task 未创建前的 bounds 仍由下一次 startActivity 的打开过渡读取 |
 | setTaskVisibility / showEmbeddedTask | 服务端 no-op | 可见性跟随 surface；槽位不重叠故无需置前 |
 | addInsets/removeInsets | 未纳入 AIDL | v1 无 caption/自绘 insets 需求 |
 | client 侧 getCurrentBoundsOnScreen / setResizeBackgroundColor 回调 | 服务端 bounds 缓存 + resize 事务本地 apply | 减少同步 IPC；事务本就是 shell 侧构建的，本地 apply 等效 |
+
+**已知限制**：singleTask/singleInstance 的 App 若已有存活 task（如退到后台再次点击），
+其 TRANSIT_TO_FRONT 过渡在本构建（bubble flag 关闭）不被 TaskViewTransitions 认领，
+会走 alien 清理路径。launcher 侧以 NEW_TASK|MULTIPLE_TASK 强制新建 task + 3s 嵌入看门狗
+兜底（清槽 + Toast）；要完整支持复用需改 WMShell 共享的 TaskViewTransitions 认领逻辑，
+风险大，v1 不做。
 
 ## 7. 权限与进程模型
 

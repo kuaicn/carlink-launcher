@@ -31,6 +31,7 @@ import android.view.SurfaceControl;
 import com.android.wm.shell.taskview.TaskView;
 import com.android.wm.shell.taskview.TaskViewBase;
 import com.android.wm.shell.taskview.TaskViewFactory;
+import com.android.wm.shell.taskview.TaskViewTransitions;
 import com.carlink.taskview.ICarLinkTaskViewClient;
 import com.carlink.taskview.ICarLinkTaskViewHost;
 
@@ -44,20 +45,22 @@ import java.util.function.Consumer;
  *
  * <p>Derived from AAOS {@code RemoteCarTaskViewServerImpl}, adapted to the phone SystemUI:
  * AAOS builds a {@code TaskViewTaskController} directly from ShellTaskOrganizer /
- * TaskViewTransitions / SyncTransactionQueue, none of which are exposed to the phone SystemUI
- * dagger graph. Instead this class obtains a {@link TaskView} from {@link TaskViewFactory}
- * (the only WMShell task view binding available in SysUIComponent), replaces its
- * {@link TaskViewBase} with this bridge and drives the controller with the client's remote
+ * TaskViewTransitions / SyncTransactionQueue, of which only TaskViewTransitions is exposed to
+ * the phone SystemUI dagger graph. Instead this class obtains a {@link TaskView} from
+ * {@link TaskViewFactory} (a WMShell task view binding available in SysUIComponent), replaces
+ * its {@link TaskViewBase} with this bridge and drives the controller with the client's remote
  * surface. The {@code TaskView}'s own view is never attached to a window, so its surface
  * callbacks never fire.
  *
  * <p>Consequences of going through {@link TaskViewFactory} (see docs/design.md):
  * <ul>
  *     <li>{@code createRootTask} is unsupported (needs ShellTaskOrganizer).</li>
- *     <li>{@code setWindowBounds} only caches the bounds; they are consumed by the next
+ *     <li>{@code setWindowBounds} always caches the bounds; they are consumed by the next
  *         {@code startActivity()} (TaskViewTaskController reads them back through
- *         {@link #getCurrentBoundsOnScreen()} when the task opens). Resizing an already
- *         embedded task needs TaskViewTransitions.setTaskBounds(), which is not reachable.</li>
+ *         {@link #getCurrentBoundsOnScreen()} when the task opens). Once the task exists, the
+ *         bounds are additionally pushed live through {@code TaskViewTransitions.setTaskBounds},
+ *         mirroring AAOS RemoteCarTaskViewServerImpl, so the WM task bounds (and with them the
+ *         input region) track the client slot.</li>
  *     <li>{@code setTaskVisibility}/{@code showEmbeddedTask} are no-ops: task visibility
  *         follows the client surface, and launcher slots never overlap.</li>
  * </ul>
@@ -86,6 +89,8 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
     private final int mOwnerUid;
     private final Rect mLastBounds = new Rect();
     private final List<Consumer<TaskView>> mPendingOps = new ArrayList<>();
+    /** Null when the SysUI graph has no TaskViewTransitions (e.g. tests); cache-only mode. */
+    private final TaskViewTransitions mTaskViewTransitions;
 
     private TaskView mTaskView;
     private boolean mReleased;
@@ -129,6 +134,15 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
             postToTaskView(taskView -> {
                 synchronized (mLastBounds) {
                     mLastBounds.set(bounds);
+                }
+                // The cache above only feeds the next open transition (the controller reads
+                // the bounds back through getCurrentBoundsOnScreen()). Once the task exists,
+                // push the bounds live so the WM task bounds follow the slot without waiting
+                // for a relaunch. TaskViewTransitions hops to the shell executor internally,
+                // so calling from the main executor is safe.
+                if (mTaskViewTransitions != null
+                        && taskView.getController().getTaskInfo() != null) {
+                    mTaskViewTransitions.setTaskBounds(taskView.getController(), bounds);
                 }
             });
         }
@@ -180,12 +194,14 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
     };
 
     public CarLinkTaskViewServerImpl(Context context, Executor mainExecutor,
-            ICarLinkTaskViewClient client, CarLinkTaskViewHost host, int ownerUid) {
+            ICarLinkTaskViewClient client, CarLinkTaskViewHost host, int ownerUid,
+            TaskViewTransitions taskViewTransitions) {
         mContext = context;
         mMainExecutor = mainExecutor;
         mClient = client;
         mHost = host;
         mOwnerUid = ownerUid;
+        mTaskViewTransitions = taskViewTransitions;
         try {
             client.asBinder().linkToDeath(mDeathRecipient, 0);
         } catch (RemoteException e) {

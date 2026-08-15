@@ -23,6 +23,7 @@ import android.util.Slog;
 import com.android.systemui.CoreStartable;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.wm.shell.taskview.TaskViewFactory;
+import com.android.wm.shell.taskview.TaskViewTransitions;
 import com.carlink.taskview.ICarLinkTaskViewClient;
 import com.carlink.taskview.ICarLinkTaskViewHost;
 
@@ -46,11 +47,11 @@ import javax.inject.Inject;
  * CarLinkTaskViewService} reaches it through {@link #getInstance()}.
  *
  * <p>Unlike AAOS CarSystemUI, the phone SystemUI dagger graph does not expose
- * ShellTaskOrganizer / TaskViewTransitions / SyncTransactionQueue; the only WMShell task view
- * entry point available here is {@link TaskViewFactory} (bound into SysUIComponent). The
- * factory creates a {@code TaskView} whose {@code TaskViewTaskController} is then driven
- * remotely by {@link CarLinkTaskViewServerImpl}; the {@code TaskView}'s own view part is never
- * attached to any window.
+ * ShellTaskOrganizer / SyncTransactionQueue; the WMShell task view entry points available here
+ * are {@link TaskViewFactory} and {@link TaskViewTransitions} (both bound into SysUIComponent
+ * from WMComponent). The factory creates a {@code TaskView} whose
+ * {@code TaskViewTaskController} is then driven remotely by {@link CarLinkTaskViewServerImpl};
+ * the {@code TaskView}'s own view part is never attached to any window.
  */
 public class CarLinkTaskViewHost implements CoreStartable {
     private static final String TAG = "CarLinkTaskViewHost";
@@ -67,14 +68,17 @@ public class CarLinkTaskViewHost implements CoreStartable {
     private final Context mContext;
     private final Executor mMainExecutor;
     private final Optional<TaskViewFactory> mTaskViewFactory;
+    private final Optional<TaskViewTransitions> mTaskViewTransitions;
     private final List<CarLinkTaskViewServerImpl> mServers = new ArrayList<>();
 
     @Inject
     public CarLinkTaskViewHost(Context context, @Main Executor mainExecutor,
-            Optional<TaskViewFactory> taskViewFactory) {
+            Optional<TaskViewFactory> taskViewFactory,
+            Optional<TaskViewTransitions> taskViewTransitions) {
         mContext = context;
         mMainExecutor = mainExecutor;
         mTaskViewFactory = taskViewFactory;
+        mTaskViewTransitions = taskViewTransitions;
     }
 
     @Override
@@ -119,7 +123,7 @@ public class CarLinkTaskViewHost implements CoreStartable {
                         + " (max " + MAX_TASK_VIEWS_PER_UID + ")");
             }
             server = new CarLinkTaskViewServerImpl(mContext, mMainExecutor, client, this,
-                    callingUid);
+                    callingUid, mTaskViewTransitions.orElse(null));
             mServers.add(server);
         }
         server.init(mTaskViewFactory.get());
