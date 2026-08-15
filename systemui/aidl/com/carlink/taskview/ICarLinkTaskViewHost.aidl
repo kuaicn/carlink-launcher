@@ -51,11 +51,11 @@ oneway interface ICarLinkTaskViewHost {
     void notifySurfaceCreated(in SurfaceControl control);
 
     /**
-     * Updates the WM-side cached bounds of the client view, in screen coordinates.
+     * Updates the WM-side bounds of the client view, in screen coordinates.
      *
-     * <p>NOTE: the bounds are consumed by the next startActivity(); resizing an already embedded
-     * task at runtime is a known v1 limitation (TaskViewTransitions is not reachable from the
-     * phone SystemUI process). See docs/design.md.
+     * <p>The bounds are cached for the next startActivity(); once the task exists they are
+     * additionally pushed live through TaskViewTransitions, so the WM task bounds (and with
+     * them the input region) track the client slot. See docs/design.md.
      */
     void setWindowBounds(in Rect bounds);
 

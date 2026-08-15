@@ -159,6 +159,12 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
      * any activity.
      */
     public void setHost(ICarLinkTaskViewHost host) {
+        if (mReleased) {
+            // Every other entry point is guarded against post-release calls; without this
+            // guard a late host would resurrect the state machine (mInitialized) and leak
+            // the server side until process death.
+            return;
+        }
         mHost = host;
         if (mSurfaceCreated) {
             // The surface arrived before the host; hand it over now (surfaceCreated() does
@@ -317,6 +323,18 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
             } catch (RemoteException e) {
                 Log.e(TAG, "exception in notifySurfaceDestroyed", e);
             }
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (changed) {
+            // surfaceChanged() only fires on surface resizes; a layout that moves the view
+            // without resizing it still changes the on-screen bounds (screen coordinates,
+            // so x/y count) without any surface callback. This also warms the host's
+            // bounds cache when the first layout lands before the surface exists.
+            updateWindowBounds();
         }
     }
 

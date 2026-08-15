@@ -25,6 +25,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -68,9 +69,11 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     /**
      * How long to wait for onTaskAppeared after startActivity before giving up on the embed.
      * Covers the broken-embed case (e.g. the shell transition was not claimed by the task
-     * view transitions) that would otherwise leave the slot permanently black.
+     * view transitions) that would otherwise leave the slot permanently black. The margin
+     * must also absorb a slow cold start on a loaded system: a false trigger tears down an
+     * embed that would otherwise have succeeded.
      */
-    private static final long EMBED_TIMEOUT_MS = 3000;
+    private static final long EMBED_TIMEOUT_MS = 5000;
 
     /** One content slot: a container view plus, while occupied, a CarLinkTaskView. */
     private static final class Slot {
@@ -157,6 +160,25 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         mServiceClient.unbind();
         mLoadExecutor.shutdown();
         super.onDestroy();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // The task may be reparented between displays without being recreated (see
+        // android:configChanges): an instance left on the phone display is moved onto the
+        // car virtual display when a new session launches it there. Keep the launch display
+        // id in sync. The layout adapts on its own and slot bounds are pushed by
+        // CarLinkTaskView.surfaceChanged() once the window is resized.
+        mDisplayId = getDisplay() != null ? getDisplay().getDisplayId() : -1;
+    }
+
+    @Override
+    public void onBackPressed() {
+        // The desktop must stay resident: back is injected into the virtual display and
+        // reaches this window whenever no embedded task holds the focus; finishing here
+        // would leave the head unit staring at a black display. Back while an embedded app
+        // is focused is delivered to that app's window and unaffected by this.
     }
 
     // TaskViewServiceClient.Listener

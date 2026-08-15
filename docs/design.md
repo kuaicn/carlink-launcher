@@ -68,7 +68,8 @@ launcher (虚拟屏进程)                        SystemUI 进程
                                              WINDOWING_MODE_MULTI_WINDOW /
                                              removeWithTaskOrganizer；
                                              wct.sendPendingIntent + 过渡动画
-   （看门狗：3s 内未等到 onTaskAppeared → 清槽 + Toast"应用无法嵌入"）
+   （看门狗：5s 内未等到 onTaskAppeared → 清槽 + Toast"应用无法嵌入"；
+     5s 需同时吸收负载系统上的慢冷启动，误触发会拆掉本可成功的嵌入）
 
 5. task 在虚拟屏创建（displayId 随 options bundle 一路带进 WCT）
    TaskViewTransitions 打开过渡：
@@ -130,7 +131,7 @@ ShellTaskOrganizer / SyncTransactionQueue——可注入的 WMShell 入口只有
 
 **已知限制**：singleTask/singleInstance 的 App 若已有存活 task（如退到后台再次点击），
 其 TRANSIT_TO_FRONT 过渡在本构建（bubble flag 关闭）不被 TaskViewTransitions 认领，
-会走 alien 清理路径。launcher 侧以 NEW_TASK|MULTIPLE_TASK 强制新建 task + 3s 嵌入看门狗
+会走 alien 清理路径。launcher 侧以 NEW_TASK|MULTIPLE_TASK 强制新建 task + 5s 嵌入看门狗
 兜底（清槽 + Toast）；要完整支持复用需改 WMShell 共享的 TaskViewTransitions 认领逻辑，
 风险大，v1 不做。
 

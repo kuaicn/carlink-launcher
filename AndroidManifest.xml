@@ -19,7 +19,12 @@
             android:name=".LauncherActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale">
+            <!-- configChanges: the activity survives configuration changes (night mode, font
+                 scale, a task reparent between displays) instead of being recreated, which
+                 would release the embedded slots; locale/layoutDirection stay undeclared so a
+                 language change still recreates and reloads the strings. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
