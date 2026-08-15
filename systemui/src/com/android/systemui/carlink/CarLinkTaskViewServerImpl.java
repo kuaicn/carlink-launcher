@@ -55,12 +55,13 @@ import java.util.function.Consumer;
  * <p>Consequences of going through {@link TaskViewFactory} (see docs/design.md):
  * <ul>
  *     <li>{@code createRootTask} is unsupported (needs ShellTaskOrganizer).</li>
- *     <li>{@code setWindowBounds} always caches the bounds; they are consumed by the next
+ *     <li>{@code setWindowBounds} caches the bounds; they are consumed by the next
  *         {@code startActivity()} (TaskViewTaskController reads them back through
  *         {@link #getCurrentBoundsOnScreen()} when the task opens). Once the task exists, the
  *         bounds are additionally pushed live through {@code TaskViewTransitions.setTaskBounds},
  *         mirroring AAOS RemoteCarTaskViewServerImpl, so the WM task bounds (and with them the
- *         input region) track the client slot.</li>
+ *         input region) track the client slot. Calls carrying unchanged bounds are dropped
+ *         before any of that work runs.</li>
  *     <li>{@code setTaskVisibility}/{@code showEmbeddedTask} are no-ops: task visibility
  *         follows the client surface, and launcher slots never overlap.</li>
  * </ul>
@@ -132,7 +133,17 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
         public void setWindowBounds(Rect bounds) {
             CarLinkTaskViewService.ensureManageTaskViewPermission(mContext);
             postToTaskView(taskView -> {
+                // Dedup inside the serialized op: the client may report unchanged bounds on
+                // every frame of a layout animation, and each live push below costs a shell
+                // executor hop (the shell-side dedup in setTaskBoundsInTransition would
+                // no-op the WM transaction, but only after the hop). The compare must run
+                // here, not on the binder thread: mLastBounds is only mutated on the main
+                // executor, so a binder-thread check could race queued-but-unapplied writes
+                // and drop the value that should win.
                 synchronized (mLastBounds) {
+                    if (mLastBounds.equals(bounds)) {
+                        return;
+                    }
                     mLastBounds.set(bounds);
                 }
                 // The cache above only feeds the next open transition (the controller reads

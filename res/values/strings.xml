@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">车机桌面</string>
     <string name="empty_hint">点击左侧应用图标，将应用嵌入到这里</string>
+    <string name="app_list_loading">正在加载应用…</string>
+    <string name="app_list_empty">手机上没有可嵌入的应用</string>
     <string name="app_icon_description">应用图标</string>
     <string name="toast_service_not_ready">SystemUI 任务视图服务尚未就绪，请稍后再试</string>
     <string name="toast_embed_failed">应用无法嵌入，请重试</string>

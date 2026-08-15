@@ -34,6 +34,7 @@ import android.view.View;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ListView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.carlink.launcher.taskview.CarLinkTaskView;
@@ -110,6 +111,7 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     private Slot mMainSlot;
     private Slot mSecondarySlot;
     private View mEmptyHint;
+    private TextView mAppListEmpty;
     private int mDisplayId;
 
     @Override
@@ -132,6 +134,10 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         mAppListAdapter = new AppListAdapter(this);
         ListView appList = findViewById(R.id.app_list);
         appList.setAdapter(mAppListAdapter);
+        // Placeholder shown while the package query runs (loading text from the layout);
+        // loadApps() swaps it for the "no apps" text if the first result is empty.
+        mAppListEmpty = findViewById(R.id.app_list_empty);
+        appList.setEmptyView(mAppListEmpty);
         appList.setOnItemClickListener((parent, view, position, id) ->
                 onAppClicked(mAppListAdapter.getItem(position)));
 
@@ -223,6 +229,12 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
                 // there); never push results into a dead UI.
                 if (!isDestroyed()) {
                     mAppListAdapter.setApps(apps);
+                    if (apps.isEmpty()) {
+                        // The query completed: replace the loading placeholder with the
+                        // definitive "no apps" text (the list stays on the loading text
+                        // until the first result arrives).
+                        mAppListEmpty.setText(R.string.app_list_empty);
+                    }
                 }
             });
         });
@@ -395,6 +407,6 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
                 mSecondarySlot.isOccupied() ? View.VISIBLE : View.GONE);
         boolean anyOccupied = mMainSlot.isOccupied() || mSecondarySlot.isOccupied();
         mEmptyHint.setVisibility(anyOccupied ? View.GONE : View.VISIBLE);
-        mAppListAdapter.setMainSlotPackage(mMainSlot.packageName);
+        mAppListAdapter.setSlotPackages(mMainSlot.packageName, mSecondarySlot.packageName);
     }
 }

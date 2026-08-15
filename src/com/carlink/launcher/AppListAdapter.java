@@ -26,18 +26,21 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Adapter backing the launcher side bar. Pure framework views only (no androidx).
  *
- * <p>The app currently embedded in the main slot is highlighted, mirroring the v1 slot policy.
+ * <p>The apps currently embedded in the main / secondary slots are highlighted, mirroring
+ * the v1 slot policy.
  */
 public class AppListAdapter extends BaseAdapter {
     private final LayoutInflater mInflater;
     private final List<AppInfo> mApps = new ArrayList<>();
 
-    /** Package name of the app currently shown in the main slot, or null. */
+    /** Package names of the apps currently embedded in the two slots, or null. */
     private String mMainSlotPackage;
+    private String mSecondarySlotPackage;
 
     public AppListAdapter(Context context) {
         mInflater = LayoutInflater.from(context);
@@ -49,9 +52,16 @@ public class AppListAdapter extends BaseAdapter {
         notifyDataSetChanged();
     }
 
-    /** Sets the package highlighted as the main slot content. */
-    public void setMainSlotPackage(String packageName) {
-        mMainSlotPackage = packageName;
+    /** Sets the packages highlighted as the embedded (main / secondary slot) content. */
+    public void setSlotPackages(String mainSlotPackage, String secondarySlotPackage) {
+        if (Objects.equals(mMainSlotPackage, mainSlotPackage)
+                && Objects.equals(mSecondarySlotPackage, secondarySlotPackage)) {
+            // updateLayout() re-pushes the slot state on every transition, including the
+            // embed-failure fallbacks where nothing changed; skip the full rebind then.
+            return;
+        }
+        mMainSlotPackage = mainSlotPackage;
+        mSecondarySlotPackage = secondarySlotPackage;
         notifyDataSetChanged();
     }
 
@@ -86,8 +96,9 @@ public class AppListAdapter extends BaseAdapter {
         AppInfo app = getItem(position);
         holder.icon.setImageDrawable(app.icon);
         holder.label.setText(app.label);
-        boolean inMainSlot = app.packageName.equals(mMainSlotPackage);
-        view.setBackgroundResource(inMainSlot
+        boolean embedded = app.packageName.equals(mMainSlotPackage)
+                || app.packageName.equals(mSecondarySlotPackage);
+        view.setBackgroundResource(embedded
                 ? R.drawable.app_item_selected_background
                 : android.R.color.transparent);
         return view;

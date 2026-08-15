@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Selection highlight for the app currently embedded in the main slot. -->
+<!-- Selection highlight for the apps currently embedded in the slots. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <solid android:color="#33445566" />

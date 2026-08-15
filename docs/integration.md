@@ -94,8 +94,9 @@ PRODUCT_COPY_FILES += \
    `dumpsys SurfaceFlinger` 可见 task 落在虚拟 displayId 上。
 4. 触摸：直接在被嵌入 app 上滑动/点击，事件直达（不经过 launcher 转发）；
    左栏列表仍可正常点击（touchable region 打洞正确）。
-5. 再点第二个应用 → 副槽嵌入，主/副等分。（已知限制：主槽 task 画面尺寸不即时跟随
-   槽位收窄，见 design.md 第 6 节。）
+5. 再点第二个应用 → 副槽嵌入，主/副等分。槽位尺寸变化时主槽 task 的 bounds 经
+   `CarLinkTaskView.onLayout`/`surfaceChanged` → `setWindowBounds` 实时跟随（见 design.md
+   第 6 节）；仅切换瞬间可能有约一帧按旧 bounds 渲染的画面（与 AAOS 行为一致）。
 6. 再点第三个应用 → 主槽替换，副槽保持。
 7. 在被嵌入 app 内一路返回退出 → 槽位自动清空，提示文本恢复。
 8. `adb shell killall com.android.systemui` 模拟 SystemUI 死亡 → 槽位清空、日志出现
