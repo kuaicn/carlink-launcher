@@ -10,7 +10,7 @@
     android:orientation="horizontal">
 
     <FrameLayout
-        android:layout_width="280dp"
+        android:layout_width="@dimen/sidebar_width"
         android:layout_height="match_parent">
 
         <ListView
@@ -29,7 +29,8 @@
             android:padding="16dp"
             android:gravity="center"
             android:text="@string/app_list_loading"
-            android:textSize="14sp" />
+            android:textColor="#B3FFFFFF"
+            android:textSize="16sp" />
     </FrameLayout>
 
     <View
@@ -76,6 +77,7 @@
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:text="@string/empty_hint"
-            android:textSize="18sp" />
+            android:textColor="#B3FFFFFF"
+            android:textSize="20sp" />
     </FrameLayout>
 </LinearLayout>

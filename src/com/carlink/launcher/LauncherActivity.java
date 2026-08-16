@@ -31,6 +31,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Display;
 import android.view.View;
 import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
@@ -74,7 +75,7 @@ import java.util.concurrent.Executors;
  * into. When the selected slot is emptied while the other slot is occupied (task vanished,
  * embed watchdog, service loss), the selection moves to the occupied one in
  * {@link #updateLayout()}, so the ring always tracks real content when there is any; with
- * both slots empty it simply stays where it was.
+ * both slots empty it falls back to the main slot.
  */
 public class LauncherActivity extends Activity implements TaskViewServiceClient.Listener {
     private static final String TAG = "CarLinkLauncher";
@@ -87,6 +88,14 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
      * embed that would otherwise have succeeded.
      */
     private static final long EMBED_TIMEOUT_MS = 5000;
+
+    /**
+     * Delay coalescing a burst of package-change broadcasts into a single side bar reload.
+     * One (un)install/update arrives as several broadcasts (ADDED plus CHANGED, REPLACED for
+     * an update) and each reload is a full package query plus a full list rebind, so reacting
+     * to every broadcast would redraw the list several times for one real change.
+     */
+    private static final long PACKAGE_RELOAD_DELAY_MS = 300;
 
     /** One content slot: a container view plus, while occupied, a CarLinkTaskView. */
     private static final class Slot {
@@ -110,11 +119,19 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService mLoadExecutor = Executors.newSingleThreadExecutor();
 
+    /** Single pending reload instance so a broadcast burst can be coalesced and cancelled. */
+    private final Runnable mPackageReloadRunnable = this::loadApps;
+
     /** Reloads the side bar app list when packages are installed, removed or changed. */
     private final BroadcastReceiver mPackageChangeReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            loadApps();
+            // Debounce the burst (see PACKAGE_RELOAD_DELAY_MS). Coalescing also narrows the
+            // window in which a tap mid-touch is swallowed: AbsListView drops a pending
+            // click when the adapter data changed since the touch, and every reload's
+            // rebind counts as a change.
+            mMainHandler.removeCallbacks(mPackageReloadRunnable);
+            mMainHandler.postDelayed(mPackageReloadRunnable, PACKAGE_RELOAD_DELAY_MS);
         }
     };
 
@@ -129,8 +146,11 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     private Slot mSelectedSlot;
     private View mEmptyHint;
     private TextView mAppListEmpty;
-    private int mDisplayId;
-    /** Corner radii in px: the container outline / selection ring, and the embedded content. */
+    /**
+     * Corner radii in px: the container outline / selection ring, and the embedded content.
+     * Density-dependent, so they are re-resolved in onConfigurationChanged (the manifest
+     * handles density changes without recreating the activity).
+     */
     private float mSlotCornerRadiusPx;
     private float mSlotContentCornerRadiusPx;
 
@@ -143,9 +163,10 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         setContentView(R.layout.activity_main);
 
         // This activity itself runs on the car virtual display, so the display id is known
-        // locally and no IPC is needed to obtain it.
-        mDisplayId = getDisplay() != null ? getDisplay().getDisplayId() : -1;
-        Log.i(TAG, "onCreate on display " + mDisplayId);
+        // locally and no IPC is needed to obtain it. It is deliberately not cached in a
+        // field: embed() queries it at launch time (see there).
+        Display display = getDisplay();
+        Log.i(TAG, "onCreate on display " + (display != null ? display.getDisplayId() : -1));
 
         mMainSlot = new Slot(findViewById(R.id.main_container));
         mSecondarySlot = new Slot(findViewById(R.id.secondary_container));
@@ -191,6 +212,9 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     @Override
     protected void onDestroy() {
         unregisterReceiver(mPackageChangeReceiver);
+        // Drop a debounced reload still pending on the main handler: it would otherwise run
+        // loadApps() after the executor shutdown below and die on RejectedExecutionException.
+        mMainHandler.removeCallbacks(mPackageReloadRunnable);
         releaseSlot(mMainSlot);
         releaseSlot(mSecondarySlot);
         mServiceClient.unbind();
@@ -203,10 +227,24 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         super.onConfigurationChanged(newConfig);
         // The task may be reparented between displays without being recreated (see
         // android:configChanges): an instance left on the phone display is moved onto the
-        // car virtual display when a new session launches it there. Keep the launch display
-        // id in sync. The layout adapts on its own and slot bounds are pushed by
-        // CarLinkTaskView.surfaceChanged() once the window is resized.
-        mDisplayId = getDisplay() != null ? getDisplay().getDisplayId() : -1;
+        // car virtual display when a new session launches it there, and the two displays
+        // usually differ in density. The px corner radii resolved in onCreate are then
+        // stale: re-resolve them and re-apply — the outline providers read the field when
+        // the outline is (re)computed, and the embedded content radius was pushed to the
+        // task views once at embed time.
+        // The layout adapts on its own and slot bounds are pushed by
+        // CarLinkTaskView.surfaceChanged()/onLayout() once the window is resized.
+        mSlotCornerRadiusPx = getResources().getDimension(R.dimen.slot_corner_radius);
+        mSlotContentCornerRadiusPx =
+                mSlotCornerRadiusPx - getResources().getDimension(R.dimen.slot_border_padding);
+        mMainSlot.container.invalidateOutline();
+        mSecondarySlot.container.invalidateOutline();
+        if (mMainSlot.taskView != null) {
+            mMainSlot.taskView.setCornerRadius(mSlotContentCornerRadiusPx);
+        }
+        if (mSecondarySlot.taskView != null) {
+            mSecondarySlot.taskView.setCornerRadius(mSlotContentCornerRadiusPx);
+        }
     }
 
     @Override
@@ -235,6 +273,14 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
     }
 
     private void loadApps() {
+        // A package-change broadcast already dispatched to the main thread is still
+        // delivered after unregisterReceiver() in onDestroy; its debounce would re-post
+        // the reload runnable, which would then hit the shut-down executor and die on
+        // RejectedExecutionException. Every caller runs on the main thread (where
+        // onDestroy and the executor shutdown also run), so this check is race-free.
+        if (isDestroyed()) {
+            return;
+        }
         mLoadExecutor.execute(() -> {
             PackageManager pm = getPackageManager();
             Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
@@ -293,6 +339,16 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
                 selectSlot(mSecondarySlot);
             }
         } else {
+            // Both slots occupied: replacing the main slot destroys its embed first. When
+            // the service is down the new embed cannot start anyway, so check before
+            // releasing — the user keeps the running app instead of trading it for an
+            // empty slot. embed() re-checks on its own (the service can still die in
+            // between); this pre-check only protects the destructive replace path.
+            if (!mServiceClient.isReady()) {
+                Toast.makeText(this, R.string.toast_service_not_ready,
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
             releaseSlot(mMainSlot);
             if (embed(mMainSlot, app)) {
                 selectSlot(mMainSlot);
@@ -357,7 +413,12 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         }
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(app.packageName);
         if (launchIntent == null) {
+            // The app was listed but has no launchable entry point left (uninstalled, or
+            // its launcher activity disabled, since the list was loaded); the debounced
+            // reload drops the row shortly. Give the tap a visible answer instead of
+            // failing silently.
             Log.w(TAG, "no launch intent for " + app.packageName);
+            Toast.makeText(this, R.string.toast_embed_failed, Toast.LENGTH_SHORT).show();
             updateLayout();
             return false;
         }
@@ -389,9 +450,14 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
                 }
                 // The launch display rides in the options bundle all the way into
                 // TaskViewTransitions, so the new task is created on the car virtual display.
+                // Queried at launch time rather than cached from onCreate: the task can be
+                // reparented between displays without any callback (no configuration change
+                // fires when the displays' configurations match, and the display id is not
+                // part of the configuration), so a cached id can go stale.
                 ActivityOptions options = ActivityOptions.makeBasic();
-                if (mDisplayId >= 0) {
-                    options.setLaunchDisplayId(mDisplayId);
+                Display display = getDisplay();
+                if (display != null) {
+                    options.setLaunchDisplayId(display.getDisplayId());
                 }
                 taskView.startActivity(slot.pendingLaunch, options);
                 // Black-screen fallback: if the task never appears (the shell side cleaned
@@ -426,7 +492,13 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         ICarLinkTaskViewHost host;
         try {
             host = mServiceClient.createTaskView(taskView.getClient());
-        } catch (IllegalStateException e) {
+        } catch (IllegalStateException | SecurityException e) {
+            // IllegalStateException covers the service racing away, the SystemUI side not
+            // being started yet and the per-uid task view limit (server-thrown runtime
+            // exceptions are marshalled back through the binder proxy verbatim, so they
+            // are not folded into the client wrapper's IllegalStateException either).
+            // SecurityException is the server-side permission re-check firing: a build or
+            // signature mismatch that retrying cannot fix, hence the different toast.
             Log.e(TAG, "failed to create task view", e);
             slot.taskView = null;
             slot.packageName = null;
@@ -434,6 +506,9 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
             // Same as the early returns above: restore layout/highlight consistency after
             // a failed replacement (the slot may have just been released by the caller).
             updateLayout();
+            Toast.makeText(this, e instanceof SecurityException
+                    ? R.string.toast_embed_denied : R.string.toast_embed_failed,
+                    Toast.LENGTH_SHORT).show();
             return false;
         }
         taskView.setHost(host);
@@ -491,11 +566,10 @@ public class LauncherActivity extends Activity implements TaskViewServiceClient.
         if (!mSelectedSlot.isOccupied()) {
             // The selected slot is empty: when the other slot is occupied the selection moves
             // there (e.g. the selected slot's task just vanished), so the ring always tracks
-            // real content; when both are empty it simply stays where it is.
+            // real content; when both are empty it falls back to the main slot, keeping the
+            // both-empty state deterministic (same as the onCreate default).
             Slot other = mSelectedSlot == mMainSlot ? mSecondarySlot : mMainSlot;
-            if (other.isOccupied()) {
-                mSelectedSlot = other;
-            }
+            mSelectedSlot = other.isOccupied() ? other : mMainSlot;
         }
         mMainSlot.container.setVisibility(
                 mMainSlot.isOccupied() ? View.VISIBLE : View.GONE);

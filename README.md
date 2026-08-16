@@ -41,7 +41,9 @@ carlink-launcher/
 │       └── taskview/
 │           ├── CarLinkTaskView.java           # SurfaceView 客户端（改自 AAOS RemoteCarTaskView）
 │           └── TaskViewServiceClient.java     # bind 服务 + 指数退避重连（1s 起倍增、15s 封顶）+ linkToDeath
-├── res/                        # 布局/中文文案/系统主题
+├── res/                        # layout（双槽主布局 + 列表行）、values（dimens/中文文案/系统主题）
+│   └── drawable/               # 选中态/圆角相关：slot_selected_background（选中槽圆角描边）、
+│                               #   app_item_selected/active_slot_background（左栏两级高亮）
 ├── systemui/                   # SystemUI 补丁镜像 + 放置说明（与树内文件一致）
 │   └── README.md               #   每个文件拷贝到树内哪个路径、手工注册点清单
 └── docs/
@@ -60,13 +62,15 @@ carlink-launcher/
      嵌入式 task 本来就在自己槽内最前）；
   2. 主槽空 → 嵌入主槽；
   3. 副槽空 → 嵌入副槽；
-  4. 都满 → 替换主槽（旧 TaskView release，task 随之从 WM 移除），副槽不动。
-- 任一时刻恰好一个槽位处于"选中态"（默认主槽）：选中槽容器画 3dp 圆角高亮描边
-  （GradientDrawable + 容器 clipToOutline 圆角裁剪；嵌入内容是 SurfaceView，用
+  4. 都满 → 替换主槽（旧 TaskView release，task 随之从 WM 移除），副槽不动；服务未就绪时
+     不做这步破坏性替换，仅 Toast 提示，保留正在运行的 app。
+- 任一时刻恰好一个槽位处于"选中态"（默认主槽）：选中槽容器画 4dp 圆角高亮描边
+  （`slot_selected_background` 描边 + 容器 clipToOutline 圆角裁剪；嵌入内容是 SurfaceView，用
   `SurfaceView.setCornerRadius`（@hide，平台签名 privapp 可用）同时圆角化 surface 层与
   打孔），未选中槽无描边。点槽位的内容外圈（容器 padding 环；内容本身的触摸直达被嵌入
   task，不经过本窗口）或从左栏嵌入/置前某 app 都会把选中态切到该槽；选中槽被置空
-  （task 退出、看门狗、服务断开）且另一槽占用时，选中态自动落到占用的槽上。
+  （task 退出、看门狗、服务断开）且另一槽占用时，选中态自动落到占用的槽上；双槽都空时
+  回落主槽（与初始默认一致），"必有一槽选中"在任何状态下成立。
 - 左栏对已嵌入的 app 做高亮，其中"选中槽"的 app 用更强一档的高亮；应用安装/卸载/变更时
   左栏自动刷新（context 注册的 package 广播，UI 销毁即注销）。
 - task 退出（用户在被嵌入 app 内按返回直至 finish，或进程死亡）→ `onTaskVanished` →
@@ -82,6 +86,14 @@ SystemUI 侧新增导出服务 `CarLinkTaskViewService` 作为 host，内部用 
 由 shell 侧 reparent 到该 surface 下。因为 leash 已经挂进 launcher 的 surface 层级，
 InputDispatcher 直接路由触摸，**输入零转发**；宿主窗口只需
 `FLAG_NOT_TOUCH_MODAL` + 客户端在 touchable region 上打洞。详见 [docs/design.md](docs/design.md)。
+
+## 已知限制（v1）
+
+- **singleTask/singleInstance 的 App**：若其已有存活 task（如退到后台后再次点击），复用产生
+  的 TRANSIT_TO_FRONT 过渡在本构建（bubble flag 关闭）不被 TaskViewTransitions 认领，会被判
+  alien 清掉。v1 以 `NEW_TASK|MULTIPLE_TASK` 强制新建 task 规避，外加 5s 嵌入看门狗兜底
+  （清槽 + Toast"应用无法嵌入"）；完整支持复用需改 WMShell 共享的 TaskViewTransitions
+  认领逻辑，风险大，v1 不做。详见 [docs/design.md](docs/design.md) 第 6 节。
 
 ## 集成方法（摘要）
 

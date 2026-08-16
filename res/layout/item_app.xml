@@ -5,12 +5,12 @@
     android:layout_height="wrap_content"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:padding="12dp">
+    android:padding="@dimen/app_row_padding">
 
     <ImageView
         android:id="@+id/app_icon"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
+        android:layout_width="@dimen/app_icon_size"
+        android:layout_height="@dimen/app_icon_size"
         android:contentDescription="@string/app_icon_description" />
 
     <TextView
@@ -21,5 +21,5 @@
         android:layout_marginStart="12dp"
         android:maxLines="1"
         android:ellipsize="end"
-        android:textSize="16sp" />
+        android:textSize="18sp" />
 </LinearLayout>

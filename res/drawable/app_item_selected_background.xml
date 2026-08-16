@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Base highlight for the apps currently embedded in the slots; the app in the selected
-     slot uses the stronger app_item_active_slot_background instead. -->
+     slot uses the stronger app_item_active_slot_background instead. Kept subtle on the black
+     window background but opaque enough to read at glance distance (~24% tint in the same
+     blue-grey family as the active-slot highlight). -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="#33445566" />
+    <solid android:color="#3D5A6B80" />
     <corners android:radius="8dp" />
 </shape>

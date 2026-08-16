@@ -17,16 +17,19 @@ vendor/carlink/launcher/
 ├── README.md / docs/ / LICENSE
 ```
 
-`vendor/carlink/carlink.mk`：
+`vendor/carlink/carlink.mk`（实际内容，由设备 device.mk 以 `inherit-product-if-exists` 引入）：
 
 ```makefile
+LOCAL_PATH := vendor/carlink
+
 PRODUCT_PACKAGES += \
     CarLinkInterconnect \
     CarLinkLauncher
 
-# privapp 白名单随 PRODUCT_COPY_FILES 装入 system/etc/permissions（与 priv-app 同分区）
+# privapp 权限白名单（跟随 xiaomi sm8250-common 的 PRODUCT_COPY_FILES 惯例；
+# 须与 priv-app 同分区，两个 App 默认装入 system/priv-app，故拷到 system/etc/permissions）
 PRODUCT_COPY_FILES += \
-    vendor/carlink/config/privapp-permissions-carlink.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-carlink.xml
+    $(LOCAL_PATH)/config/privapp-permissions-carlink.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-carlink.xml
 ```
 
 `vendor/carlink/config/privapp-permissions-carlink.xml` 追加白名单块：
@@ -100,6 +103,19 @@ PRODUCT_COPY_FILES += \
 6. 再点第三个应用 → 主槽替换，副槽保持。
 7. 在被嵌入 app 内一路返回退出 → 槽位自动清空，提示文本恢复。
 8. `adb shell killall com.android.systemui` 模拟 SystemUI 死亡 → 槽位清空、日志出现
-   重连；SystemUI 重启后再次点击可正常嵌入。
-9. 日志：`adb logcat -s CarLinkLauncher CarLinkTaskViewHost CarLinkTaskViewServerImpl
-   CarLinkTaskViewService` 无 SecurityException / RemoteException 刷屏。
+   重连；SystemUI 重启后 logcat 再现 `CarLinkTaskViewHost started`（CoreStartable 随
+   dagger 图重建自动重启），再次点击可正常嵌入，且重连延迟不超过退避上限 15 s。
+9. 启动影响：SystemUI 重启前后对比 logcat 时间戳——`Start proc com.android.systemui`
+   到 `CarLinkTaskViewHost started` 的增量即 host.start() 耗时（预期 ms 级以内；
+   start() 仅赋值单例 + 一行日志）；打补丁前后整机冷启动到 SystemUI 就绪的时间差
+   应在噪声范围内（dagger 图只多一个 @SysUISingleton 绑定）。
+10. 零常驻开销：launcher 未绑定（或未安装）时，`adb shell dumpsys meminfo
+    com.android.systemui` 与打补丁前对比无可见增长；host 不注册任何 listener、
+    不创建线程，`TaskViewFactory.create` 仅在 createTaskView 调用时发生。
+    反向验证：卸载/停用 launcher 后 SystemUI 行为与打补丁前完全一致。
+11. launcher 进程死亡方向：嵌入状态下 `adb shell killall com.carlink.launcher` →
+    SystemUI 侧日志出现 `Task view client died; releasing the server side`（death
+    recipient 自动释放 TaskView 与 organizer listener）；launcher 重启后可再次嵌入，
+    不触达 per-uid 上限（8 个）。
+12. 日志：`adb logcat -s CarLinkLauncher CarLinkTaskViewHost CarLinkTaskViewServerImpl
+    CarLinkTaskViewService` 无 SecurityException / RemoteException 刷屏。

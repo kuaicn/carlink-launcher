@@ -13,7 +13,7 @@
 | `src/com/android/systemui/carlink/CarLinkTaskViewHost.java` | `frameworks/base/packages/SystemUI/src/com/android/systemui/carlink/CarLinkTaskViewHost.java` |
 | `src/com/android/systemui/carlink/CarLinkTaskViewServerImpl.java` | `frameworks/base/packages/SystemUI/src/com/android/systemui/carlink/CarLinkTaskViewServerImpl.java` |
 
-说明：AIDL 三件套与仓库根目录 `aidl/` 下的文件**内容完全相同**（launcher 与 SystemUI 各自编译同一份契约，包名 `com.carlink.taskview` 保持一致才能跨进程互通）。
+说明：AIDL 三件套与仓库 `src/com/carlink/taskview/` 下的 launcher 侧 AIDL **内容完全相同**（launcher 与 SystemUI 各自编译同一份契约，包名 `com.carlink.taskview` 保持一致才能跨进程互通）。
 
 ## 需要手工加的注册点（树内现有文件的追加式改动）
 

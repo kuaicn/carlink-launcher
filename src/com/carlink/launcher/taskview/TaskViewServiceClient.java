@@ -62,7 +62,7 @@ public class TaskViewServiceClient {
 
     private ICarLinkTaskViewService mService;
     private boolean mBound;
-    /** Current rebind backoff; reset to {@link #REBIND_INITIAL_DELAY_MS} on a successful bind. */
+    /** Current rebind backoff; reset to {@link #REBIND_INITIAL_DELAY_MS} once connected. */
     private long mRebindDelayMs = REBIND_INITIAL_DELAY_MS;
     /** Single rebind callback instance so a pending retry can be coalesced and cancelled. */
     private final Runnable mRebindRunnable = this::bind;
@@ -80,7 +80,9 @@ public class TaskViewServiceClient {
             try {
                 service.linkToDeath(mDeathRecipient, 0);
             } catch (RemoteException e) {
-                Log.e(TAG, "task view service died right after connect", e);
+                // Warn (not error): with a crash-looping SystemUI this repeats on every
+                // rebind cycle, same as the bind-failure paths below.
+                Log.w(TAG, "task view service died right after connect", e);
                 mService = null;
                 scheduleRebind();
                 return;
@@ -183,8 +185,16 @@ public class TaskViewServiceClient {
                 // call handles it. This state is also reached when unbind() ran meanwhile.
                 return;
             }
+            // Notify only when the service had actually become ready: mService != null tracks
+            // exactly "onServiceReady delivered, onServiceGone not yet". Death can also arrive
+            // before the first connect ever completed (this runnable ahead of the queued
+            // onServiceConnected, which the stale-callback guard there then drops); no hosts
+            // exist in that case, so skip the listener but still rebind.
+            boolean wasReady = mService != null;
             mService = null;
-            mListener.onServiceGone();
+            if (wasReady) {
+                mListener.onServiceGone();
+            }
             scheduleRebind();
         });
     }

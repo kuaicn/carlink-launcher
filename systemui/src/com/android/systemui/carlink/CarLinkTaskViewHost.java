@@ -21,6 +21,7 @@ import android.os.Binder;
 import android.util.Slog;
 
 import com.android.systemui.CoreStartable;
+import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.wm.shell.taskview.TaskViewFactory;
 import com.android.wm.shell.taskview.TaskViewTransitions;
@@ -53,6 +54,7 @@ import javax.inject.Inject;
  * {@code TaskViewTaskController} is then driven remotely by {@link CarLinkTaskViewServerImpl};
  * the {@code TaskView}'s own view part is never attached to any window.
  */
+@SysUISingleton
 public class CarLinkTaskViewHost implements CoreStartable {
     private static final String TAG = "CarLinkTaskViewHost";
 
@@ -126,7 +128,19 @@ public class CarLinkTaskViewHost implements CoreStartable {
                     callingUid, mTaskViewTransitions.orElse(null));
             mServers.add(server);
         }
-        server.init(mTaskViewFactory.get());
+        try {
+            server.init(mTaskViewFactory.get());
+        } catch (RuntimeException e) {
+            // init() hops to the shell executor, which rejects the task once it is shutting
+            // down. Roll back the registration, otherwise the failed creation would occupy
+            // one of the caller's per-uid slots until its process dies: the client never
+            // received the host binder, so no release() call will arrive for this server.
+            synchronized (mServers) {
+                mServers.remove(server);
+            }
+            server.unlinkDeathRecipient();
+            throw e;
+        }
         return server.getHostImpl();
     }
 

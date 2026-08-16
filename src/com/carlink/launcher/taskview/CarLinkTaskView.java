@@ -54,6 +54,13 @@ import com.carlink.taskview.ICarLinkTaskViewHost;
  * ({@link ViewTreeObserver.OnComputeInternalInsetsListener}), so touches on the embedded task
  * fall through to the task itself. The host activity window must also set
  * {@link android.view.WindowManager.LayoutParams#FLAG_NOT_TOUCH_MODAL}.
+ *
+ * <p>Corner radius ({@code setCornerRadius}) rounds only the rendering — the surface layer
+ * and the hole punched for it. Both the touchable-region punch and the WM bounds pushed by
+ * {@link #updateWindowBounds()} stay rectangular, so the tiny corner cutouts (radius squared
+ * times (1 - pi/4) each) keep routing touches to the embedded task while showing the host
+ * window's background. Accepted as-is: same trade-off as AAOS RemoteCarTaskView, and the
+ * area is a few pixels per corner at the slot radii in use.
  */
 public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callback,
         ViewTreeObserver.OnComputeInternalInsetsListener {
@@ -241,6 +248,13 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
         if (mHost == null || mReleased) {
             return;
         }
+        // Never push degenerate bounds: getBoundsOnScreen() leaves the out rect untouched
+        // when the view is detached (mTmpRect would replay its previous contents), and a
+        // zero-size rect live-pushed through setTaskBounds would resize the task to nothing.
+        // All current call sites fire attached and laid out; this guards the public entry.
+        if (!isAttachedToWindow() || getWidth() == 0 || getHeight() == 0) {
+            return;
+        }
         getBoundsOnScreen(mTmpRect);
         try {
             mHost.setWindowBounds(mTmpRect);
@@ -333,7 +347,11 @@ public class CarLinkTaskView extends SurfaceView implements SurfaceHolder.Callba
             // surfaceChanged() only fires on surface resizes; a layout that moves the view
             // without resizing it still changes the on-screen bounds (screen coordinates,
             // so x/y count) without any surface callback. This also warms the host's
-            // bounds cache when the first layout lands before the surface exists.
+            // bounds cache when the first layout lands before the surface exists. When a
+            // resize triggers both this and surfaceChanged() in the same traversal, the two
+            // pushes carry the same rect (the frame is final before the surface callbacks
+            // fire) and the server's bounds dedup drops the duplicate; no client-side
+            // throttle is needed on top of that.
             updateWindowBounds();
         }
     }

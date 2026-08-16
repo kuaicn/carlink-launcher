@@ -61,7 +61,17 @@ import java.util.function.Consumer;
  *         bounds are additionally pushed live through {@code TaskViewTransitions.setTaskBounds},
  *         mirroring AAOS RemoteCarTaskViewServerImpl, so the WM task bounds (and with them the
  *         input region) track the client slot. Calls carrying unchanged bounds are dropped
- *         before any of that work runs.</li>
+ *         before any of that work runs. A push that lands while the task is hidden or one of
+ *         this task view's own transitions is in flight only records the bounds shell-side;
+ *         they still take effect, because the next show transition re-applies the recorded
+ *         bounds and every open/change dispatch re-reads {@link #getCurrentBoundsOnScreen()}.
+ *         Caveat inherited from AOSP: the pending queue is shared by all task views, so a push
+ *         landing while a <em>foreign</em> task view's transition (the other slot, or a bubble)
+ *         is in flight is recorded but never applied -- the shell-side dedup also drops a
+ *         re-push of the same value -- and the slot's WM bounds stay stale until its bounds
+ *         change again or some later transition (show, relaunch, display change) involves the
+ *         task. The public TaskViewTransitions API offers no way to close that window from
+ *         here, so it is documented rather than worked around.</li>
  *     <li>{@code setTaskVisibility}/{@code showEmbeddedTask} are no-ops: task visibility
  *         follows the client surface, and launcher slots never overlap.</li>
  * </ul>
@@ -150,7 +160,9 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
                 // the bounds back through getCurrentBoundsOnScreen()). Once the task exists,
                 // push the bounds live so the WM task bounds follow the slot without waiting
                 // for a relaunch. TaskViewTransitions hops to the shell executor internally,
-                // so calling from the main executor is safe.
+                // so calling from the main executor is safe. When a transition is in flight
+                // the push only records the bounds shell-side; the class doc lists when that
+                // record is (and is not) applied later.
                 if (mTaskViewTransitions != null
                         && taskView.getController().getTaskInfo() != null) {
                     mTaskViewTransitions.setTaskBounds(taskView.getController(), bounds);
@@ -255,6 +267,16 @@ public class CarLinkTaskViewServerImpl implements TaskViewBase {
     /** The uid that created this server, captured on the binder thread at creation time. */
     int getOwnerUid() {
         return mOwnerUid;
+    }
+
+    /**
+     * Undoes the constructor's {@code linkToDeath} without running the release path. Used
+     * when {@link #init} throws synchronously: no TaskView was created and the client never
+     * received the host binder (so no {@code release()} will arrive), leaving the death
+     * recipient as the only bookkeeping to revert. Not part of the public API.
+     */
+    void unlinkDeathRecipient() {
+        mClient.asBinder().unlinkToDeath(mDeathRecipient, 0);
     }
 
     /**
